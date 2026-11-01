@@ -1,0 +1,125 @@
+# pls share SP-3
+
+Imprimer sur une **Fujifilm Instax SHARE SP-3** (et SP-2) **sans l'appli officielle**.
+
+Deux morceaux :
+
+- **`app/`** : une appli Android qui se connecte toute seule au Wi-Fi de l'imprimante, le garde pour elle, et imprime une photo de la galerie (ou reçue via « Partager »).
+- **`core/`** : le protocole de l'imprimante en Kotlin pur, un client, un **simulateur d'imprimante** et une ligne de commande `instax-print` pour imprimer depuis un ordinateur (Linux, macOS, Windows).
+
+> ⚠️ **État du projet** : le protocole est celui documenté et vérifié sur une SP-3 réelle par [mbutrovich/instax_api](https://github.com/mbutrovich/instax_api) (fork de [jpwsutton/instax_api](https://github.com/jpwsutton/instax_api)). Le code de ce dépôt est validé contre des trames capturées sur une vraie imprimante et contre le simulateur, mais **il n'a pas encore été testé sur une SP-3 physique**. Premier tirage réel = premier retour bienvenu (ouvrez une issue avec le log `-v`).
+
+## Pourquoi l'appli officielle « ne se connecte pas »
+
+La SP-3 crée son propre réseau Wi-Fi `INSTAX-XXXXXXXX` (ouvert, sans mot de passe) et écoute en TCP sur `192.168.0.251:8080`. Ce réseau n'a **pas d'accès Internet**. Depuis Android 10, le téléphone considère un tel réseau comme « cassé » : il bascule sur la 4G/5G, ou revient sur la box, et l'appli officielle ne trouve plus l'imprimante.
+
+L'appli de ce dépôt contourne ça proprement : elle **demande le réseau à Android** via `WifiNetworkSpecifier` (Android affiche une petite fenêtre « choisir le réseau INSTAX-… »), Android maintient ce Wi-Fi tant que l'appli le demande, et **chaque socket est lié explicitement à ce réseau** (`Network.socketFactory`). Les données mobiles peuvent rester allumées, rien à bricoler dans les réglages Wi-Fi.
+
+## Alternatives existantes (si vous ne voulez pas compiler une appli)
+
+| Projet | Plateformes | SP-3 | Remarques |
+|---|---|---|---|
+| [analogbits/Instax-Offline-Printer](https://github.com/analogbits/Instax-Offline-Printer) | macOS (appli native), Windows et Linux (scripts Python + interface), navigateur | ✅ depuis la v1.5.3 (« Legacy Instax Printer ») | Le plus complet : interface graphique, plugin Lightroom/Darktable, simulateur intégré. Pas d'appli Android/iOS. |
+| [mbutrovich/instax_api](https://github.com/mbutrovich/instax_api) | Ligne de commande Python | ✅ testé sur SP-3 | `instax-print photo.jpg`. Le doc `docs/protocol.md` est la référence du protocole. |
+| [jpwsutton/instax_api](https://github.com/jpwsutton/instax_api) | Python | partiel | Projet d'origine, archivé. |
+| Appli officielle *instax SHARE* | Android / iOS | ✅ | La seule sur les stores. |
+| Appareils Fujifilm X compatibles | — | ✅ | Impression directe depuis le boîtier, sans téléphone. |
+
+Il n'existait **aucune appli Android alternative** : c'est le trou que ce dépôt comble.
+
+## Appli Android
+
+### Installer
+
+1. Aller dans l'onglet **Actions** du dépôt, ouvrir le dernier run vert, télécharger l'artefact `pls-share-sp3-apk` (ou l'APK attaché à une *release* `v*`).
+2. Installer l'APK sur le téléphone (autoriser les sources inconnues). Android 10 ou plus récent.
+
+Ou compiler soi-même : ouvrir le dossier dans Android Studio, ou `./gradlew :app:assembleDebug` avec `ANDROID_HOME` défini.
+
+### Utiliser
+
+1. Allumer l'imprimante (voyant Wi-Fi allumé).
+2. **1. Connecter l'imprimante** → choisir `INSTAX-XXXXXXXX` dans la fenêtre d'Android. L'appli affiche alors le modèle, le firmware, la batterie et le nombre de films restants.
+3. **2. Choisir une photo** (ou, depuis la galerie, *Partager → pls share SP-3*). L'aperçu montre exactement ce qui sortira : recadré au carré, ou photo entière avec bandes blanches (interrupteur).
+4. **3. Imprimer**. Barre de progression pendant l'envoi (1,9 Mo), puis attente de la fin du tirage (~15 s). L'appli verrouille l'imprimante pendant l'impression et la libère ensuite.
+
+Si vous avez changé le PIN de l'imprimante (1111 par défaut), modifiez-le en bas de l'écran.
+
+Le bord épais du tirage est le **bas** de l'image.
+
+### Ce que l'appli ne fait pas (encore)
+
+- Pas de filtres, de cadres ni de collage. Une photo, un tirage.
+- SP-1 non supportée (format JPEG propriétaire, différent).
+- iOS : impossible avec cette approche (pas de sockets TCP bruts liés à un réseau depuis une appli tierce sans NetworkExtension). Sur iPhone, utilisez un ordinateur avec `instax-print`.
+
+## Ligne de commande (ordinateur)
+
+Prérequis : Java 17+. Rejoindre d'abord le Wi-Fi `INSTAX-XXXXXXXX` de l'imprimante.
+
+```bash
+./gradlew :core:installDist
+core/build/install/instax-print/bin/instax-print --info          # modèle, batterie, films restants
+core/build/install/instax-print/bin/instax-print photo.jpg       # imprime, recadré au carré
+core/build/install/instax-print/bin/instax-print --fit contain photo.jpg   # photo entière, bandes blanches
+core/build/install/instax-print/bin/instax-print --preview out.png photo.jpg  # aperçu sans imprimer
+core/build/install/instax-print/bin/instax-print --pin 1234 photo.jpg
+core/build/install/instax-print/bin/instax-print --off           # éteint l'imprimante
+```
+
+Un zip autonome (`core/build/distributions/instax-print.zip`) est aussi produit par la CI.
+
+### Simulateur
+
+Pour tester sans gaspiller de film :
+
+```bash
+core/build/install/instax-print/bin/instax-print --simulate --save-dir /tmp/tirages
+# dans un autre terminal
+core/build/install/instax-print/bin/instax-print --host 127.0.0.1 photo.jpg
+```
+
+Chaque « tirage » est enregistré en PNG dans `/tmp/tirages`. L'appli Android peut aussi viser le simulateur en changeant l'adresse de l'imprimante (le téléphone et l'ordinateur doivent être sur le même réseau).
+
+## Le protocole en deux mots
+
+Tout est détaillé dans [docs/protocol.md de mbutrovich/instax_api](https://github.com/mbutrovich/instax_api/blob/main/docs/protocol.md). Résumé :
+
+- TCP `192.168.0.251:8080`, une connexion par étape. Trames `0x24 opcode longueur session PIN … somme 0D0A` (commande) / `0x2A …` (réponse), big-endian, somme de contrôle = NOT de la somme 16 bits.
+- Séquence : `LOCK` → `MODEL_NAME`, `PRINT_COUNT`, `SPECIFICATIONS`, `RESET` → `TRANSFER_START` + 32 × `SEND_CHUNK` (60 000 octets) + `TRANSFER_END` → `PRINT_START` → `PRINT_STATUS` toutes les secondes jusqu'à `0x00` → `UNLOCK`.
+- Image : 800 × 800 RGB brut (1 920 000 octets), lignes du **bas vers le haut**, chaque ligne = tous les R, puis tous les G, puis tous les B.
+- Le PIN (1111 par défaut) est dans chaque trame ; `0xF7` = mauvais PIN, `0xA0` = un autre appareil tient le verrou (expire après 60 s d'inactivité).
+
+Le module `core` implémente tout ça (`instax/Protocol.kt`, `InstaxPrinter.kt`, `RawImage.kt`) avec des tests qui rejouent les trames capturées sur une vraie imprimante par le projet d'origine.
+
+## Développement
+
+```bash
+./gradlew :core:test        # 25 tests, dont un cycle d'impression complet contre le simulateur
+./gradlew :app:assembleDebug  # nécessite le SDK Android (sinon le module est ignoré automatiquement)
+```
+
+Structure :
+
+```
+core/src/main/kotlin/instax/
+  Protocol.kt       trames, opcodes, codes retour
+  InstaxPrinter.kt  client : info(), print(), ping(), powerOff()
+  RawImage.kt       encodage ARGB → format brut de l'imprimante
+  Simulator.kt      fausse imprimante (tests, essais)
+  DesktopImages.kt  redimensionnement java.awt pour la CLI
+  cli/Main.kt       instax-print
+app/src/main/kotlin/io/github/akaiikitsune/plsshare/
+  MainActivity.kt   l'écran unique
+  PrinterNetwork.kt WifiNetworkSpecifier + sockets liés au réseau
+  Photos.kt         chargement EXIF-correct, recadrage, pixels
+  Strings.kt        textes FR/EN
+```
+
+## Crédits
+
+- [James Sutton (jpwsutton)](https://github.com/jpwsutton/instax_api) pour la rétro-ingénierie initiale du protocole SP-2.
+- [mbutrovich](https://github.com/mbutrovich/instax_api) pour la vérification sur SP-3 et la documentation du protocole.
+- [analogbits](https://github.com/analogbits/Instax-Offline-Printer) pour la suite bureau.
+
+Licence MIT.

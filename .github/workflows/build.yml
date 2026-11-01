@@ -1,0 +1,54 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  core:
+    name: core (protocol, CLI, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test and package the CLI
+        run: ./gradlew :core:test :core:distZip --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: instax-print-cli
+          path: core/build/distributions/*.zip
+
+  android:
+    name: android app (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build the debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Rename the APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk pls-share-sp3-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pls-share-sp3-apk
+          path: pls-share-sp3-debug.apk
+      - name: Attach the APK to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pls-share-sp3-debug.apk
