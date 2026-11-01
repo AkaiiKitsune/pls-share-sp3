@@ -255,19 +255,28 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- Home screen
 
+    /** A fixed title bar: title on the left, an optional action on the right. */
+    private fun titleBar(title: String, action: View? = null) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(ui.dp(20), ui.dp(12), ui.dp(20), ui.dp(12))
+        addView(ui.title(title), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+        if (action != null) addView(action, LinearLayout.LayoutParams(ui.wrap, ui.dp(44)))
+    }
+
+    /** A screen made of a fixed title bar and a scrolling body. */
+    private fun fixedHeaderScreen(header: View, body: View): View = ui.column().apply {
+        addView(header, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        addView(View(this@MainActivity).apply { setBackgroundColor(Ui.CARD_STRONG) }, LinearLayout.LayoutParams(ui.match, ui.dp(1)))
+        addView(ScrollView(this@MainActivity).apply { addView(body) }, LinearLayout.LayoutParams(ui.match, 0, 1f))
+    }
+
     private fun buildHome(): View {
         val root = ui.column(20)
 
         lateinit var menuButton: Button
         menuButton = ui.softButton("⋮") { showMenu(menuButton) }
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(ui.title(s.title), LinearLayout.LayoutParams(0, ui.wrap, 1f))
-            addView(menuButton, LinearLayout.LayoutParams(ui.dp(48), ui.dp(44)))
-        }
-        root.addView(header)
-        ui.space(root, 16)
+        val header = titleBar(s.title, menuButton)
 
         // Status card
         statusDot = ui.dot(Ui.WARN)
@@ -350,7 +359,7 @@ class MainActivity : Activity() {
         debugCard = buildDebugCard()
         root.addView(debugCard)
 
-        return ScrollView(this).apply { addView(root) }
+        return fixedHeaderScreen(header, root)
     }
 
     private fun buildDebugCard(): View {
@@ -678,13 +687,9 @@ class MainActivity : Activity() {
 
     private fun buildHistory(): View {
         val root = ui.column(20)
-        root.addView(ui.title(s.historyTitle))
-        ui.space(root, 12)
         historyList = ui.column()
         root.addView(historyList, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 16)
-        root.addView(ui.softButton(s.back) { show(homeView) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        return ScrollView(this).apply { addView(root) }
+        return fixedHeaderScreen(titleBar(s.historyTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 }), root)
     }
 
     private fun refreshHistory() {
@@ -1352,6 +1357,7 @@ class MainActivity : Activity() {
     private fun applyEdits() {
         editState.copyFrom(editorView.state)
         refreshPreview()
+        message("")
         show(homeView)
     }
 
@@ -1359,8 +1365,6 @@ class MainActivity : Activity() {
 
     private fun buildGuide(): View {
         val root = ui.column(20)
-        root.addView(ui.title(s.guideTitle))
-        ui.space(root, 12)
         root.addView(ui.text(s.guideIntro, 15f))
         ui.space(root, 16)
         s.guideSteps.forEachIndexed { i, step ->
@@ -1381,8 +1385,7 @@ class MainActivity : Activity() {
         ui.space(root, 20)
         root.addView(ui.primaryButton(s.wifiSettings) { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 8)
-        root.addView(ui.softButton(s.back) { show(homeView) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        return ScrollView(this).apply { addView(root) }
+        return fixedHeaderScreen(titleBar(s.guideTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 }), root)
     }
 
     // ---------------------------------------------------------------- Printing
