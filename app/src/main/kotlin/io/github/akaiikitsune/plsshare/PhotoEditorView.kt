@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.DashPathEffect
 import android.graphics.RectF
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -23,12 +24,44 @@ class PhotoEditorView(context: Context) : View(context) {
 
     /** Paint blown highlights and crushed shadows over the photo. */
     var showClipping = false
-        set(value) { field = value; frameDirty = true; invalidate() }
+        set(value) {
+            field = value
+            frameDirty = true
+            removeCallbacks(blink)
+            if (value) { blinkOn = true; postDelayed(blink, BLINK_MS) }
+            invalidate()
+        }
 
     /** Show the photo without any look (same framing), while a "compare" button is held. */
     var showOriginal = false
         set(value) { if (field != value) { field = value; invalidate() } }
     private val neutral = EditState()
+
+    /** Texts tab: touches move the selected overlay instead of the photo. */
+    var overlayMode = false
+        set(value) { field = value; invalidate() }
+    var selectedOverlay: Overlay? = null
+        set(value) { field = value; invalidate() }
+    var onOverlaySelected: ((Overlay?) -> Unit)? = null
+    private var overlayBounds: List<FloatArray> = emptyList()
+    private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        pathEffect = DashPathEffect(floatArrayOf(14f, 10f), 0f)
+    }
+    private var dragging: Overlay? = null
+
+    // The clipping overlay blinks gently: its alpha alternates every BLINK_MS while it is shown.
+    private val clipPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private var blinkOn = true
+    private val blink = object : Runnable {
+        override fun run() {
+            if (!showClipping) return
+            blinkOn = !blinkOn
+            invalidate()
+            postDelayed(this, BLINK_MS)
+        }
+    }
 
     /** Whether the histogram wants the pixels of the square. */
     var wantHistogram = false
@@ -76,7 +109,7 @@ class PhotoEditorView(context: Context) : View(context) {
     private val snapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 4f
-        color = Ui.ACCENT
+        color = Ui.accent(context)
     }
 
     /** Whether a finger is down: the grid and the snap guides are only shown while editing. */
@@ -102,6 +135,8 @@ class PhotoEditorView(context: Context) : View(context) {
     companion object {
         /** How close (fraction of the print size) an edge must be to a guide to stick to it. */
         private const val SNAP = 0.02f
+
+        private const val BLINK_MS = 500L
 
         /** Side of the off-screen render while interacting, and of the histogram sample. */
         private const val PREVIEW_SIZE = 480
@@ -247,7 +282,7 @@ class PhotoEditorView(context: Context) : View(context) {
         if (showClipping) {
             val o = overlay ?: Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { overlay = it }
             val op = overlayPixels?.takeIf { it.size == pixels.size } ?: IntArray(pixels.size).also { overlayPixels = it }
-            Processing.clipping(pixels, op)
+            Processing.clipping(pixels, size, op, stripe = maxOf(3, size / 80))
             o.setPixels(op, 0, size, 0, 0, size, size)
         }
         frameDirty = false
@@ -264,6 +299,12 @@ class PhotoEditorView(context: Context) : View(context) {
         if (state.needsPixelPass) Processing.apply(pixels, size, size, state, sharpen = false)
         histogramDirty = false
         onFrame?.invoke(pixels, size)
+    }
+
+    /** Overlays changed: redraw without re-running the per-pixel steps. */
+    fun overlaysChanged() {
+        invalidate()
+        onChanged?.invoke()
     }
 
     /** Force a full re-render (for example to feed the histogram after it was switched on). */
@@ -287,6 +328,7 @@ class PhotoEditorView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (overlayMode) return onOverlayTouch(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // Keep the scrolling page from stealing vertical drags while a finger is on the photo.
@@ -316,6 +358,60 @@ class PhotoEditorView(context: Context) : View(context) {
         return true
     }
 
+    private var lastX = 0f
+    private var lastY = 0f
+
+    /** In the texts tab: tap selects an overlay, drag moves it, pinch resizes it. */
+    private fun onOverlayTouch(event: MotionEvent): Boolean {
+        val size = side().toFloat()
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                val fx = (event.x - left()) / size
+                val fy = (event.y - top()) / size
+                val overlays = state.overlays
+                var hit: Overlay? = null
+                for (i in overlayBounds.indices.reversed()) {
+                    val r = overlayBounds[i]
+                    if (i < overlays.size && fx >= r[0] && fx <= r[2] && fy >= r[1] && fy <= r[3]) { hit = overlays[i]; break }
+                }
+                if (hit != null) {
+                    selectedOverlay = hit
+                    onOverlaySelected?.invoke(hit)
+                }
+                dragging = hit
+                lastX = event.x; lastY = event.y
+                touching = true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val o = dragging
+                if (o != null && event.pointerCount == 1) {
+                    o.x = (o.x + (event.x - lastX) / size).coerceIn(0.02f, 0.98f)
+                    o.y = (o.y + (event.y - lastY) / size).coerceIn(0.02f, 0.98f)
+                    lastX = event.x; lastY = event.y
+                    overlaysChanged()
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                dragging = null
+                touching = false
+                invalidate()
+            }
+        }
+        overlayScale.onTouchEvent(event)
+        return true
+    }
+
+    private val overlayScale = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            val o = dragging ?: return false
+            o.size = (o.size * detector.scaleFactor).coerceIn(0.015f, 0.25f)
+            overlaysChanged()
+            return true
+        }
+    })
+
     override fun onDraw(canvas: Canvas) {
         val b = bitmap
         val size = side().toFloat()
@@ -343,9 +439,22 @@ class PhotoEditorView(context: Context) : View(context) {
             }
             dest.set(l, t, l + size, t + size)
             canvas.drawBitmap(frame!!, null, dest, scaledPaint)
-            if (showClipping) overlay?.let { canvas.drawBitmap(it, null, dest, scaledPaint) }
+            if (showClipping) overlay?.let {
+                clipPaint.alpha = if (blinkOn) 230 else 90
+                canvas.drawBitmap(it, null, dest, clipPaint)
+            }
         } else {
             PrintRenderer.draw(canvas, b, state, l, t, size)
+        }
+        overlayBounds = if (state.overlays.isNotEmpty()) PrintRenderer.drawOverlays(canvas, state, l, t, size) else emptyList()
+        if (overlayMode) {
+            val sel = selectedOverlay
+            val index = state.overlays.indexOf(sel)
+            if (sel != null && index in overlayBounds.indices) {
+                val r = overlayBounds[index]
+                selectionPaint.color = Ui.accent(context)
+                canvas.drawRoundRect(l + r[0] * size, t + r[1] * size, l + r[2] * size, t + r[3] * size, 12f, 12f, selectionPaint)
+            }
         }
         if (wantHistogram && histogramDirty) renderHistogram(b)
         if (touching) {
@@ -362,7 +471,7 @@ class PhotoEditorView(context: Context) : View(context) {
                 canvas.drawRect(l + r[0] * size, t + r[1] * size, l + r[2] * size, t + r[3] * size, snapPaint)
             }
             if (twisting && twistArmed) {
-                textPaint.color = if (snappedRotation) Ui.ACCENT else Color.WHITE
+                textPaint.color = if (snappedRotation) Ui.accent(context) else Color.WHITE
                 canvas.drawText(String.format(java.util.Locale.US, "%.1f°", state.rotation), l + 16f, t + size - 16f, textPaint)
             }
         }

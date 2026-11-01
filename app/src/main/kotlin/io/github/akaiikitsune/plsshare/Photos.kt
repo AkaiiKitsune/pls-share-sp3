@@ -11,6 +11,36 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.net.Uri
 import instax.ImageSource
+import java.text.DateFormat
+import java.util.Date
+
+/** A text stamped on the print: a caption, or the date / time of the photo. Positions are fractions of the print size. */
+class Overlay(
+    var kind: Kind = Kind.TEXT,
+    var text: String = "",
+    var x: Float = 0.5f,
+    var y: Float = 0.92f,
+    /** Text height as a fraction of the print size. */
+    var size: Float = 0.045f,
+    var dark: Boolean = false,
+    var style: Style = Style.SHADOW,
+) {
+    enum class Kind { TEXT, DATE, TIME, DATETIME }
+    enum class Style { SHADOW, OUTLINE, PILL }
+
+    fun copy() = Overlay(kind, text, x, y, size, dark, style)
+
+    /** The string to draw, resolving date kinds against [photoDate] (or now). */
+    fun resolve(photoDate: Long?): String {
+        val date = Date(photoDate ?: System.currentTimeMillis())
+        return when (kind) {
+            Kind.TEXT -> text
+            Kind.DATE -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(date)
+            Kind.TIME -> DateFormat.getTimeInstance(DateFormat.SHORT).format(date)
+            Kind.DATETIME -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(date) + "  " + DateFormat.getTimeInstance(DateFormat.SHORT).format(date)
+        }
+    }
+}
 
 /** How the photo sits in the square print, plus colour adjustments. All values are print-relative. */
 class EditState {
@@ -60,14 +90,24 @@ class EditState {
     /** A [Filters] preset id, applied before the adjustments above. */
     var filter = "normal"
 
+    /** Texts stamped on the print, drawn last. */
+    val overlays = mutableListOf<Overlay>()
+
+    /** When the photo was taken (EXIF), used by date overlays. Null means "now". */
+    var photoDate: Long? = null
+
     fun reset() {
         scale = 1f; offsetX = 0f; offsetY = 0f; rotation = 0f
         brightness = 0f; contrast = 0f; saturation = 1f; filter = "normal"
         shadows = 0f; highlights = 0f; blacks = 0f; whites = 0f
         temperature = 0f; tint = 0f; sharpness = 0f; vignette = 0f
+        overlays.clear()
     }
 
     fun copyFrom(other: EditState) {
+        overlays.clear()
+        for (o in other.overlays) overlays += o.copy()
+        photoDate = other.photoDate
         scale = other.scale; offsetX = other.offsetX; offsetY = other.offsetY; rotation = other.rotation
         brightness = other.brightness; contrast = other.contrast; saturation = other.saturation; filter = other.filter
         shadows = other.shadows; highlights = other.highlights; blacks = other.blacks; whites = other.whites
@@ -183,9 +223,63 @@ object PrintRenderer {
         canvas.restore()
     }
 
+    private val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.DEFAULT_BOLD }
+    private val overlayStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        style = Paint.Style.STROKE
+    }
+    private val overlayBack = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /**
+     * Draw the overlays on top of the square. Returns each overlay's bounds as fractions of the
+     * print size (left, top, right, bottom), for hit-testing in the editor.
+     */
+    fun drawOverlays(canvas: Canvas, state: EditState, left: Float, top: Float, size: Float): List<FloatArray> {
+        val bounds = ArrayList<FloatArray>(state.overlays.size)
+        for (o in state.overlays) {
+            val text = o.resolve(state.photoDate)
+            val px = o.size * size
+            overlayPaint.textSize = px
+            overlayPaint.clearShadowLayer()
+            val width = overlayPaint.measureText(text)
+            val cx = left + o.x * size
+            val cy = top + o.y * size
+            val baseline = cy + px * 0.35f
+            val x = cx - width / 2
+            val fg = if (o.dark) Color.BLACK else Color.WHITE
+            val bg = if (o.dark) Color.WHITE else Color.BLACK
+            when (o.style) {
+                Overlay.Style.SHADOW -> {
+                    overlayPaint.setShadowLayer(px * 0.12f, 0f, px * 0.06f, (0xB0 shl 24) or (bg and 0xFFFFFF))
+                }
+                Overlay.Style.OUTLINE -> {
+                    overlayStroke.textSize = px
+                    overlayStroke.strokeWidth = px * 0.1f
+                    overlayStroke.color = bg
+                    canvas.drawText(text, x, baseline, overlayStroke)
+                }
+                Overlay.Style.PILL -> {
+                    overlayBack.color = (0xA0 shl 24) or (bg and 0xFFFFFF)
+                    val padX = px * 0.5f
+                    val padY = px * 0.3f
+                    canvas.drawRoundRect(x - padX, cy - px * 0.55f - padY, x + width + padX, cy + px * 0.55f + padY, px * 0.6f, px * 0.6f, overlayBack)
+                }
+            }
+            overlayPaint.color = fg
+            canvas.drawText(text, x, baseline, overlayPaint)
+            overlayPaint.clearShadowLayer()
+            val margin = px * 0.4f
+            bounds += floatArrayOf(
+                (x - margin - left) / size, (cy - px * 0.7f - top) / size,
+                (x + width + margin - left) / size, (cy + px * 0.7f - top) / size,
+            )
+        }
+        return bounds
+    }
+
     /**
      * The full look at [size] pixels: geometry and colour matrix on the canvas, then the per-pixel
-     * tone curve and sharpening. This is exactly what gets printed.
+     * tone curve and sharpening, then the overlays. This is exactly what gets printed.
      */
     fun render(bitmap: Bitmap, state: EditState, size: Int, sharpen: Boolean = true): Bitmap {
         val target = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
@@ -196,6 +290,7 @@ object PrintRenderer {
             Processing.apply(pixels, size, size, state, sharpen)
             target.setPixels(pixels, 0, size, 0, 0, size, size)
         }
+        if (state.overlays.isNotEmpty()) drawOverlays(Canvas(target), state, 0f, 0f, size.toFloat())
         return target
     }
 
@@ -215,6 +310,18 @@ object PrintRenderer {
 object Photos {
     /** The longest side a loaded photo is kept at. The print is 800 px, so this leaves room for zooming. */
     private const val MAX_SIDE = 2400
+
+    /** When the photo was taken, from its EXIF data, or null. */
+    fun exifDate(resolver: ContentResolver, uri: Uri): Long? = try {
+        resolver.openInputStream(uri)?.use { input ->
+            val exif = android.media.ExifInterface(input)
+            val raw = exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL)
+                ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME)
+            raw?.let { java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US).parse(it)?.time }
+        }
+    } catch (e: Exception) {
+        null
+    }
 
     /** A copy no larger than [maxSide] on its longest side, or the bitmap itself if already small enough. */
     fun scaledForEditing(bitmap: Bitmap, maxSide: Int): Bitmap {

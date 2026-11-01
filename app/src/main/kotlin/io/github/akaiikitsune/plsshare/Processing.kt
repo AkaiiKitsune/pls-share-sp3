@@ -90,15 +90,21 @@ object Processing {
         return arrayOf(r, g, b, l)
     }
 
-    const val CLIP_HIGH = 0xA0FF3030.toInt()
-    const val CLIP_LOW = 0xA03070FF.toInt()
+    const val CLIP_HIGH = 0xFFFF2020.toInt()
+    const val CLIP_LOW = 0xFF2070FF.toInt()
 
-    /** An overlay marking blown highlights (any channel ≥ 253) in red and crushed shadows (all ≤ 2) in blue. */
-    fun clipping(pixels: IntArray, out: IntArray = IntArray(pixels.size)): IntArray {
+    /**
+     * A hatched overlay (diagonal stripes, like a camera's zebra) marking blown highlights (any
+     * channel ≥ 253) in red and crushed shadows (all ≤ 2) in blue. [stripe] is the stripe width in pixels.
+     */
+    fun clipping(pixels: IntArray, width: Int, out: IntArray = IntArray(pixels.size), stripe: Int = 6): IntArray {
+        val period = stripe * 2
         for (i in pixels.indices) {
             val p = pixels[i]
             val r = (p shr 16) and 0xFF; val g = (p shr 8) and 0xFF; val b = p and 0xFF
+            val hatched = ((i % width) + (i / width)) % period < stripe
             out[i] = when {
+                !hatched -> 0
                 r >= 253 || g >= 253 || b >= 253 -> CLIP_HIGH
                 r <= 2 && g <= 2 && b <= 2 -> CLIP_LOW
                 else -> 0

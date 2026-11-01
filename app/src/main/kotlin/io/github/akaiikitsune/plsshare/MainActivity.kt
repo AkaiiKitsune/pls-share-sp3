@@ -117,6 +117,17 @@ class MainActivity : Activity() {
     private lateinit var clippingButton: Button
     private lateinit var clippingHint: TextView
     private var showHistogram = false
+    private lateinit var adjustPanel: View
+    private lateinit var textsPanel: LinearLayout
+    private lateinit var tabAdjust: Button
+    private lateinit var tabTexts: Button
+    private lateinit var overlayList: LinearLayout
+    private lateinit var overlayEditor: LinearLayout
+    private lateinit var overlayTextField: EditText
+    private lateinit var overlaySizeBar: SeekBar
+    private lateinit var overlayDarkSwitch: Switch
+    private lateinit var blackWhiteButton: Button
+    private var photoDate: Long? = null
     private lateinit var presetRow: LinearLayout
     private val presetTiles = LinkedHashMap<String, Pair<ImageView, TextView>>()
 
@@ -528,8 +539,11 @@ class MainActivity : Activity() {
 
     private fun loadPhoto(uri: Uri) {
         Thread {
+            val date = Photos.exifDate(contentResolver, uri)
             val result = runCatching { Photos.load(contentResolver, uri) }
             mainHandler.post {
+                photoDate = date
+                editState.photoDate = date
                 result.onSuccess {
                     photo?.recycle()
                     editorPhoto?.recycle()
@@ -570,18 +584,30 @@ class MainActivity : Activity() {
         root.addView(ui.text(s.editorHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
         ui.space(root, 12)
 
-        root.addView(ui.row(
+        tabAdjust = ui.softButton(s.tabAdjust) { showTab(adjust = true) }
+        tabTexts = ui.softButton(s.tabTexts) { showTab(adjust = false) }
+        root.addView(ui.row(tabAdjust, tabTexts))
+        ui.space(root, 12)
+
+        val adjust = ui.column()
+        adjustPanel = adjust
+        root.addView(adjust, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        textsPanel = buildTextsPanel()
+        textsPanel.visibility = View.GONE
+        root.addView(textsPanel, LinearLayout.LayoutParams(ui.match, ui.wrap))
+
+        adjust.addView(ui.row(
             ui.softButton(s.rotate) { editorView.update { rotation = (Math.round(rotation / 90f) + 1) * 90f % 360f } },
             ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.whole) { editorView.update { scale = PrintRenderer.containScale(editorView.bitmap!!, this); offsetX = 0f; offsetY = 0f } },
-            ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() },
+            ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() }.also { blackWhiteButton = it },
             ui.softButton(s.reset) { editorView.update { reset() }; syncSliders(); syncPresets() },
             gap = 6,
         ))
-        ui.space(root, 16)
+        ui.space(adjust, 16)
 
-        root.addView(ui.text(s.filters, 13f, alpha = 0.7f))
-        ui.space(root, 6)
+        adjust.addView(ui.text(s.filters, 13f, alpha = 0.7f))
+        ui.space(adjust, 6)
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         for (preset in Filters.presets) {
             val thumb = ImageView(this).apply {
@@ -600,12 +626,12 @@ class MainActivity : Activity() {
             presetTiles[preset.id] = thumb to label
             presetRow.addView(tile, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(10) })
         }
-        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
-        ui.space(root, 16)
+        adjust.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
+        ui.space(adjust, 16)
 
         // Histogram and clipping, below the photo
         histogramView = HistogramView(this).apply { visibility = View.GONE }
-        root.addView(histogramView, LinearLayout.LayoutParams(ui.match, ui.dp(72)))
+        adjust.addView(histogramView, LinearLayout.LayoutParams(ui.match, ui.dp(72)))
         editorView.onFrame = { pixels, _ -> histogramView.update(Processing.histogram(pixels, stride = 1)) }
         histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
         clippingButton = ui.softButton(s.clipping) { toggleClipping() }
@@ -619,33 +645,174 @@ class MainActivity : Activity() {
                 true
             }
         }
-        root.addView(ui.row(compareButton, histogramButton, clippingButton, gap = 6))
-        root.addView(clippingHint)
-        ui.space(root, 16)
+        adjust.addView(ui.row(compareButton, histogramButton, clippingButton, gap = 6))
+        adjust.addView(clippingHint)
+        ui.space(adjust, 16)
 
-        root.addView(ui.text(s.light, 14f, bold = true))
-        ui.space(root, 6)
-        slider(root, s.brightness, -100, 100, { it.brightness.toInt() }) { v -> editorView.update { brightness = v.toFloat() } }
-        slider(root, s.contrast, -100, 100, { it.contrast.toInt() }) { v -> editorView.update { contrast = v.toFloat() } }
-        slider(root, s.highlights, -100, 100, { it.highlights.toInt() }) { v -> editorView.update { highlights = v.toFloat() } }
-        slider(root, s.shadows, -100, 100, { it.shadows.toInt() }) { v -> editorView.update { shadows = v.toFloat() } }
-        slider(root, s.whites, -100, 100, { it.whites.toInt() }) { v -> editorView.update { whites = v.toFloat() } }
-        slider(root, s.blacks, -100, 100, { it.blacks.toInt() }) { v -> editorView.update { blacks = v.toFloat() } }
-        ui.space(root, 8)
+        adjust.addView(ui.text(s.light, 14f, bold = true))
+        ui.space(adjust, 6)
+        slider(adjust, s.brightness, -100, 100, { it.brightness.toInt() }) { v -> editorView.update { brightness = v.toFloat() } }
+        slider(adjust, s.contrast, -100, 100, { it.contrast.toInt() }) { v -> editorView.update { contrast = v.toFloat() } }
+        slider(adjust, s.highlights, -100, 100, { it.highlights.toInt() }) { v -> editorView.update { highlights = v.toFloat() } }
+        slider(adjust, s.shadows, -100, 100, { it.shadows.toInt() }) { v -> editorView.update { shadows = v.toFloat() } }
+        slider(adjust, s.whites, -100, 100, { it.whites.toInt() }) { v -> editorView.update { whites = v.toFloat() } }
+        slider(adjust, s.blacks, -100, 100, { it.blacks.toInt() }) { v -> editorView.update { blacks = v.toFloat() } }
+        ui.space(adjust, 8)
 
-        root.addView(ui.text(s.colour, 14f, bold = true))
-        ui.space(root, 6)
-        slider(root, s.temperature, -100, 100, { it.temperature.toInt() }) { v -> editorView.update { temperature = v.toFloat() } }
-        slider(root, s.tint, -100, 100, { it.tint.toInt() }) { v -> editorView.update { tint = v.toFloat() } }
-        slider(root, s.saturation, 0, 200, { (it.saturation * 100f).toInt() }) { v -> editorView.update { saturation = v / 100f } }
-        ui.space(root, 8)
+        adjust.addView(ui.text(s.colour, 14f, bold = true))
+        ui.space(adjust, 6)
+        slider(adjust, s.temperature, -100, 100, { it.temperature.toInt() }) { v -> editorView.update { temperature = v.toFloat() } }
+        slider(adjust, s.tint, -100, 100, { it.tint.toInt() }) { v -> editorView.update { tint = v.toFloat() } }
+        slider(adjust, s.saturation, 0, 200, { (it.saturation * 100f).toInt() }) { v -> editorView.update { saturation = v / 100f }; syncSliders() }
+        ui.space(adjust, 8)
 
-        root.addView(ui.text(s.details, 14f, bold = true))
-        ui.space(root, 6)
-        slider(root, s.sharpness, 0, 100, { it.sharpness.toInt() }) { v -> editorView.update { sharpness = v.toFloat() } }
-        slider(root, s.vignette, 0, 100, { it.vignette.toInt() }) { v -> editorView.update { vignette = v.toFloat() } }
+        adjust.addView(ui.text(s.details, 14f, bold = true))
+        ui.space(adjust, 6)
+        slider(adjust, s.sharpness, 0, 100, { it.sharpness.toInt() }) { v -> editorView.update { sharpness = v.toFloat() } }
+        slider(adjust, s.vignette, 0, 100, { it.vignette.toInt() }) { v -> editorView.update { vignette = v.toFloat() } }
 
         return ScrollView(this).apply { addView(root) }
+    }
+
+    private fun showTab(adjust: Boolean) {
+        adjustPanel.visibility = if (adjust) View.VISIBLE else View.GONE
+        textsPanel.visibility = if (adjust) View.GONE else View.VISIBLE
+        tabAdjust.setTextColor(if (adjust) ui.accent else labelColor)
+        tabTexts.setTextColor(if (adjust) labelColor else ui.accent)
+        editorView.overlayMode = !adjust
+        if (!adjust && editorView.selectedOverlay == null) editorView.selectedOverlay = editorView.state.overlays.lastOrNull()
+        refreshOverlayPanel()
+    }
+
+    private fun buildTextsPanel(): LinearLayout {
+        val panel = ui.column()
+        panel.addView(ui.text(s.textsHint, 12f, alpha = 0.6f))
+        ui.space(panel, 10)
+        panel.addView(ui.row(
+            ui.softButton(s.addText) { addOverlay(Overlay(Overlay.Kind.TEXT, text = "instax")) },
+            ui.softButton(s.addDate) { addOverlay(Overlay(Overlay.Kind.DATE)) },
+            gap = 6,
+        ))
+        ui.space(panel, 6)
+        panel.addView(ui.row(
+            ui.softButton(s.addTime) { addOverlay(Overlay(Overlay.Kind.TIME)) },
+            ui.softButton(s.addDateTime) { addOverlay(Overlay(Overlay.Kind.DATETIME, size = 0.035f)) },
+            gap = 6,
+        ))
+        ui.space(panel, 12)
+        overlayList = ui.column()
+        panel.addView(overlayList, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(panel, 8)
+
+        overlayEditor = ui.column()
+        overlayEditor.addView(ui.text(s.overlayText, 13f, alpha = 0.7f))
+        overlayTextField = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(text: android.text.Editable?) {
+                    val o = editorView.selectedOverlay ?: return
+                    if (o.kind == Overlay.Kind.TEXT && o.text != text.toString()) {
+                        o.text = text.toString()
+                        editorView.overlaysChanged()
+                        refreshOverlayList()
+                    }
+                }
+            })
+        }
+        overlayEditor.addView(overlayTextField)
+        ui.space(overlayEditor, 8)
+        overlayEditor.addView(ui.text(s.overlaySize, 13f, alpha = 0.7f))
+        overlaySizeBar = SeekBar(this).apply {
+            max = 235
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    editorView.selectedOverlay?.size = (progress + 15) / 1000f
+                    editorView.overlaysChanged()
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar) {}
+            })
+        }
+        overlayEditor.addView(overlaySizeBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        overlayDarkSwitch = Switch(this).apply {
+            text = s.overlayDark
+            setOnCheckedChangeListener { _, checked ->
+                val o = editorView.selectedOverlay ?: return@setOnCheckedChangeListener
+                if (o.dark != checked) { o.dark = checked; editorView.overlaysChanged() }
+            }
+        }
+        overlayEditor.addView(overlayDarkSwitch)
+        ui.space(overlayEditor, 6)
+        overlayEditor.addView(ui.row(
+            ui.softButton(s.styleShadow) { setOverlayStyle(Overlay.Style.SHADOW) },
+            ui.softButton(s.styleOutline) { setOverlayStyle(Overlay.Style.OUTLINE) },
+            ui.softButton(s.stylePill) { setOverlayStyle(Overlay.Style.PILL) },
+            gap = 6,
+        ))
+        ui.space(overlayEditor, 6)
+        overlayEditor.addView(ui.softButton(s.remove) { removeSelectedOverlay() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        panel.addView(overlayEditor, LinearLayout.LayoutParams(ui.match, ui.wrap))
+
+        editorView.onOverlaySelected = { refreshOverlayPanel() }
+        return panel
+    }
+
+    private fun addOverlay(overlay: Overlay) {
+        // Stack new texts upwards so they do not land on top of each other.
+        overlay.y = (0.92f - 0.07f * editorView.state.overlays.size).coerceAtLeast(0.1f)
+        editorView.state.overlays += overlay
+        editorView.selectedOverlay = overlay
+        editorView.overlaysChanged()
+        refreshOverlayPanel()
+    }
+
+    private fun setOverlayStyle(style: Overlay.Style) {
+        editorView.selectedOverlay?.style = style
+        editorView.overlaysChanged()
+    }
+
+    private fun removeSelectedOverlay() {
+        val o = editorView.selectedOverlay ?: return
+        editorView.state.overlays.remove(o)
+        editorView.selectedOverlay = editorView.state.overlays.lastOrNull()
+        editorView.overlaysChanged()
+        refreshOverlayPanel()
+    }
+
+    private fun refreshOverlayList() {
+        overlayList.removeAllViews()
+        val overlays = editorView.state.overlays
+        if (overlays.isEmpty()) {
+            overlayList.addView(ui.text(s.noOverlay, 13f, alpha = 0.6f))
+            return
+        }
+        for (o in overlays) {
+            val selected = o === editorView.selectedOverlay
+            val label = o.resolve(editorView.state.photoDate).ifBlank { "…" }
+            val rowButton = ui.softButton(label) {
+                editorView.selectedOverlay = o
+                refreshOverlayPanel()
+            }.apply {
+                setTextColor(if (selected) ui.accent else labelColor)
+                typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            }
+            overlayList.addView(rowButton, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { bottomMargin = ui.dp(6) })
+        }
+    }
+
+    private fun refreshOverlayPanel() {
+        refreshOverlayList()
+        val o = editorView.selectedOverlay
+        overlayEditor.visibility = if (o == null) View.GONE else View.VISIBLE
+        if (o == null) return
+        overlayTextField.visibility = if (o.kind == Overlay.Kind.TEXT) View.VISIBLE else View.GONE
+        if (o.kind == Overlay.Kind.TEXT && overlayTextField.text.toString() != o.text) overlayTextField.setText(o.text)
+        overlaySizeBar.progress = (o.size * 1000f).toInt() - 15
+        overlayDarkSwitch.isChecked = o.dark
     }
 
     /** A labelled slider over [min]..[max] whose current value is read from the editor state by [read]. */
@@ -678,18 +845,21 @@ class MainActivity : Activity() {
 
     private fun syncSliders() {
         for ((bar, read) in sliders.values) bar.progress = read(editorView.state)
+        val mono = editorView.state.saturation == 0f
+        blackWhiteButton.setTextColor(if (mono) ui.accent else labelColor)
+        blackWhiteButton.typeface = if (mono) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
     }
 
     private fun toggleHistogram() {
         showHistogram = !showHistogram
         histogramView.visibility = if (showHistogram) View.VISIBLE else View.GONE
-        histogramButton.setTextColor(if (showHistogram) Ui.ACCENT else labelColor)
+        histogramButton.setTextColor(if (showHistogram) ui.accent else labelColor)
         editorView.wantHistogram = showHistogram
     }
 
     private fun toggleClipping() {
         editorView.showClipping = !editorView.showClipping
-        clippingButton.setTextColor(if (editorView.showClipping) Ui.ACCENT else labelColor)
+        clippingButton.setTextColor(if (editorView.showClipping) ui.accent else labelColor)
         clippingHint.visibility = if (editorView.showClipping) View.VISIBLE else View.GONE
     }
 
@@ -699,7 +869,7 @@ class MainActivity : Activity() {
             val (thumb, label) = views
             thumb.alpha = if (id == selected) 1f else 0.55f
             label.typeface = if (id == selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-            label.setTextColor(if (id == selected) Ui.ACCENT else labelColor)
+            label.setTextColor(if (id == selected) ui.accent else labelColor)
         }
     }
 
@@ -713,9 +883,12 @@ class MainActivity : Activity() {
         val bitmap = editorPhoto ?: photo ?: return pickPhoto()
         editorView.bitmap = bitmap
         editorView.state.copyFrom(editState)
+        editorView.state.photoDate = photoDate
+        editorView.selectedOverlay = null
         buildThumbnails(bitmap)
         syncSliders()
         syncPresets()
+        showTab(adjust = true)
         show(editorScreen)
     }
 
@@ -734,7 +907,7 @@ class MainActivity : Activity() {
         root.addView(ui.text(s.guideIntro, 15f))
         ui.space(root, 16)
         s.guideSteps.forEachIndexed { i, step ->
-            val number = ui.text("${i + 1}", 16f, bold = true, color = Ui.ACCENT)
+            val number = ui.text("${i + 1}", 16f, bold = true, color = ui.accent)
             val body = ui.text(step, 15f)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL

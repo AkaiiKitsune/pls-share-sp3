@@ -16,13 +16,38 @@ import android.widget.TextView
 /** Small helpers to build a tidy screen from framework widgets only. */
 class Ui(private val context: Context) {
     companion object {
-        const val ACCENT = 0xFFFF6B4A.toInt()
-        const val ACCENT_DARK = 0xFFE0552F.toInt()
+        const val FALLBACK_ACCENT = 0xFFFF6B4A.toInt()
         const val OK_GREEN = 0xFF2EBD6B.toInt()
         const val WARN = 0xFFF2A93B.toInt()
         const val CARD = 0x14808080
         const val CARD_STRONG = 0x22808080
+
+        fun isDark(context: Context): Boolean =
+            context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+        /** The system's dynamic accent (Android 12+, follows the wallpaper), or the app's own orange before that. */
+        fun accent(context: Context): Int =
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                context.getColor(if (isDark(context)) android.R.color.system_accent1_300 else android.R.color.system_accent1_600)
+            } else FALLBACK_ACCENT
+
+        /** A darker shade of the accent for the pressed state. */
+        fun accentPressed(context: Context): Int =
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                context.getColor(if (isDark(context)) android.R.color.system_accent1_500 else android.R.color.system_accent1_800)
+            } else 0xFFE0552F.toInt()
+
+        /** Text colour that reads on the accent. */
+        fun onAccent(context: Context): Int =
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && isDark(context)) {
+                context.getColor(android.R.color.system_accent1_900)
+            } else Color.WHITE
     }
+
+    val accent: Int = accent(context)
+    val accentPressed: Int = accentPressed(context)
+    val onAccent: Int = onAccent(context)
 
     val match = ViewGroup.LayoutParams.MATCH_PARENT
     val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -81,11 +106,11 @@ class Ui(private val context: Context) {
     fun primaryButton(label: String, onClick: () -> Unit) = Button(context).apply {
         text = label
         isAllCaps = false
-        setTextColor(Color.WHITE)
+        setTextColor(onAccent)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
         typeface = Typeface.DEFAULT_BOLD
         minimumHeight = dp(56)
-        background = RippleDrawable(android.content.res.ColorStateList.valueOf(ACCENT_DARK), rounded(ACCENT, 28), null)
+        background = RippleDrawable(android.content.res.ColorStateList.valueOf(accentPressed), rounded(accent, 28), null)
         stateListAnimator = null
         setOnClickListener { onClick() }
     }
