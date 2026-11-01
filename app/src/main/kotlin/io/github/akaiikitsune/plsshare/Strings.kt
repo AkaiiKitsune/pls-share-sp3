@@ -124,7 +124,7 @@ class Strings private constructor(private val fr: Boolean) {
     val histogram get() = t("Histogramme", "Histogram")
     val clipping get() = t("Zones écrêtées", "Clipping")
     val clippingHint get() = t("Rouge : hautes lumières brûlées · Bleu : ombres bouchées", "Red: blown highlights · Blue: crushed shadows")
-    val editorHint get() = t("Pincez pour zoomer, tournez à deux doigts, glissez pour déplacer. Bords, centre et angles droits s'aimantent. Le bord épais du tirage est en bas.", "Pinch to zoom, twist with two fingers to rotate, drag to move. Edges, centre and right angles snap. The thick edge of the print is at the bottom.")
+    val editorHint get() = t("Pincer : zoom · deux doigts : rotation · glisser : déplacer · bords et centre aimantés · nom d'un curseur : remise à zéro", "Pinch: zoom · two fingers: rotate · drag: move · edges and centre snap · slider name: reset")
 
     // Printing service, queue, history
     val printingTitle get() = t("Impression", "Printing")

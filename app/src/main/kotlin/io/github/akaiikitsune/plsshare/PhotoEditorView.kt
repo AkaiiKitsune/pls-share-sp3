@@ -41,6 +41,7 @@ class PhotoEditorView(context: Context) : View(context) {
     var showOriginal = false
         set(value) { if (field != value) { field = value; invalidate() } }
     private val neutral = EditState()
+    private var originalFrame: Bitmap? = null
 
     /** Texts tab: touches move the selected overlay instead of the photo. */
     var overlayMode = false
@@ -334,9 +335,14 @@ class PhotoEditorView(context: Context) : View(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = MeasureSpec.getSize(heightMeasureSpec)
-        val side = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) w else minOf(w, h)
-        setMeasuredDimension(side, side)
+        // Square when the height is free (inside a scrolling page); otherwise fill the given box
+        // and draw the square centred in it.
+        if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) setMeasuredDimension(w, w)
+        else setMeasuredDimension(w, h)
     }
+
+    /** Where the square sits inside the view: left, top, side. */
+    fun squareBounds(): FloatArray = floatArrayOf(left(), top(), side().toFloat())
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (overlayMode) return onOverlayTouch(event)
@@ -437,7 +443,17 @@ class PhotoEditorView(context: Context) : View(context) {
         if (showOriginal) {
             neutral.reset()
             neutral.scale = state.scale; neutral.offsetX = state.offsetX; neutral.offsetY = state.offsetY; neutral.rotation = state.rotation
-            PrintRenderer.draw(canvas, b, neutral, l, t, size)
+            if (filmPreview) {
+                // The film simulation is a display property, not an edit: keep it on the original too.
+                val previewSize = minOf(size.toInt(), PREVIEW_SIZE)
+                val o = originalFrame?.takeIf { it.width == previewSize }
+                    ?: Bitmap.createBitmap(previewSize, previewSize, Bitmap.Config.ARGB_8888).also { originalFrame = it }
+                PrintRenderer.draw(Canvas(o), b, neutral, 0f, 0f, previewSize.toFloat())
+                dest.set(l, t, l + size, t + size)
+                canvas.drawBitmap(o, null, dest, filmPaint)
+            } else {
+                PrintRenderer.draw(canvas, b, neutral, l, t, size)
+            }
             textPaint.color = Color.WHITE
             canvas.drawText("Original", l + 16f, t + 44f, textPaint)
             canvas.drawRect(l, t, l + size, t + size, framePaint)

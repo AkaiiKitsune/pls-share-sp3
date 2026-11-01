@@ -789,28 +789,47 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Editor screen
 
     private fun buildEditor(): View {
+        // Fixed header and photo on top; everything else scrolls underneath, so the photo stays in
+        // view while a slider is dragged. The histogram floats over the photo's bottom-left corner.
+        val screen = ui.column()
         val root = ui.column(16)
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(ui.dp(16), ui.dp(10), ui.dp(16), ui.dp(8))
             addView(ui.softButton(s.cancel) { show(homeView) }, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
             addView(ui.text(s.editorTitle, 17f, bold = true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(0, ui.wrap, 1f))
             addView(ui.primaryButton(s.ok) { applyEdits() }.apply { minimumHeight = ui.dp(44); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f) }, LinearLayout.LayoutParams(ui.dp(80), ui.wrap))
         }
-        root.addView(header)
-        ui.space(root, 12)
+        screen.addView(header, LinearLayout.LayoutParams(ui.match, ui.wrap))
 
+        // The photo area is a centred square (at most 40 % of the screen height), so an overlay
+        // anchored to its corner is always inside the photo.
+        val metrics = resources.displayMetrics
+        val photoSide = minOf(metrics.widthPixels, (metrics.heightPixels * 0.40f).toInt())
         editorView = PhotoEditorView(this)
-        root.addView(editorView, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 8)
+        histogramView = HistogramView(this).apply {
+            visibility = View.GONE
+            background = ui.rounded(0x66000000, 8)
+            alpha = 0.9f
+        }
+        editorView.onFrame = { pixels, _ -> histogramView.update(Processing.histogram(pixels, stride = 1)) }
+        val photoArea = FrameLayout(this).apply {
+            addView(editorView, FrameLayout.LayoutParams(photoSide, photoSide))
+            addView(histogramView, FrameLayout.LayoutParams(ui.dp(150), ui.dp(56), Gravity.BOTTOM or Gravity.START).apply {
+                marginStart = ui.dp(8); bottomMargin = ui.dp(8)
+            })
+        }
+        val photoWrapper = FrameLayout(this).apply {
+            addView(photoArea, FrameLayout.LayoutParams(photoSide, photoSide, Gravity.CENTER_HORIZONTAL))
+        }
+        screen.addView(photoWrapper, LinearLayout.LayoutParams(ui.match, photoSide))
+
         root.addView(ui.text(s.editorHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
         ui.space(root, 10)
 
-        // Tools under the photo, available in both tabs: compare, film preview, histogram, clipping.
-        histogramView = HistogramView(this).apply { visibility = View.GONE }
-        root.addView(histogramView, LinearLayout.LayoutParams(ui.match, ui.dp(72)))
-        editorView.onFrame = { pixels, _ -> histogramView.update(Processing.histogram(pixels, stride = 1)) }
+        // Tools, available in both tabs: compare, film preview, histogram, clipping.
         histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
         clippingButton = ui.softButton(s.clipping) { toggleClipping() }
         clippingHint = ui.text(s.clippingHint, 12f, alpha = 0.6f).apply { visibility = View.GONE; gravity = Gravity.CENTER }
@@ -927,8 +946,10 @@ class MainActivity : Activity() {
             colorRow.addView(chip, LinearLayout.LayoutParams(ui.dp(36), ui.dp(36)).apply { marginEnd = ui.dp(10) })
         }
         adjust.addView(colorRow)
+        ui.space(adjust, 24)
 
-        return ScrollView(this).apply { addView(root) }
+        screen.addView(ScrollView(this).apply { addView(root) }, LinearLayout.LayoutParams(ui.match, 0, 1f))
+        return screen
     }
 
     private fun showTab(adjust: Boolean) {
