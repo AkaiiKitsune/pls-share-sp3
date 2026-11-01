@@ -557,7 +557,7 @@ class MainActivity : Activity() {
         ui.space(root, 12)
 
         root.addView(ui.row(
-            ui.softButton(s.rotate) { editorView.update { rotation = (rotation + 90) % 360 } },
+            ui.softButton(s.rotate) { editorView.update { rotation = (Math.round(rotation / 90f) + 1) * 90f % 360f } },
             ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.whole) { editorView.update { scale = PrintRenderer.containScale(editorView.bitmap!!, this); offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() },

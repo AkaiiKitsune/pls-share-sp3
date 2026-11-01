@@ -21,8 +21,8 @@ class EditState {
     var offsetX = 0f
     var offsetY = 0f
 
-    /** Degrees, multiples of 90. */
-    var rotation = 0
+    /** Degrees, clockwise, 0 ≤ rotation < 360. The "rotate" button adds 90, a two-finger twist is continuous. */
+    var rotation = 0f
 
     /** -100..100 */
     var brightness = 0f
@@ -37,7 +37,7 @@ class EditState {
     var filter = "normal"
 
     fun reset() {
-        scale = 1f; offsetX = 0f; offsetY = 0f; rotation = 0
+        scale = 1f; offsetX = 0f; offsetY = 0f; rotation = 0f
         brightness = 0f; contrast = 0f; saturation = 1f; filter = "normal"
     }
 
@@ -56,24 +56,39 @@ class EditState {
 object PrintRenderer {
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-    /** Width and height of the photo once rotated, in pixels. */
-    fun rotatedSize(bitmap: Bitmap, state: EditState): Pair<Int, Int> =
-        if (state.rotation % 180 == 0) bitmap.width to bitmap.height else bitmap.height to bitmap.width
+    /** Width and height of the box around the rotated photo, in pixels. */
+    fun rotatedSize(bitmap: Bitmap, state: EditState): Pair<Float, Float> {
+        val rad = Math.toRadians(state.rotation.toDouble())
+        val c = kotlin.math.abs(kotlin.math.cos(rad)).toFloat()
+        val sn = kotlin.math.abs(kotlin.math.sin(rad)).toFloat()
+        val w = bitmap.width * c + bitmap.height * sn
+        val h = bitmap.width * sn + bitmap.height * c
+        return w to h
+    }
+
+    /**
+     * The scale (print size = 1) at which the rotated photo exactly covers the square, so that
+     * [EditState.scale] = 1 means "fill" whatever the angle. A rectangle covers a square of side S
+     * once each of its sides is at least S · (|cos θ| + |sin θ|).
+     */
+    fun fillScale(bitmap: Bitmap, state: EditState): Float {
+        val rad = Math.toRadians(state.rotation.toDouble())
+        val cover = (kotlin.math.abs(kotlin.math.cos(rad)) + kotlin.math.abs(kotlin.math.sin(rad))).toFloat()
+        return maxOf(1f / bitmap.width, 1f / bitmap.height) * cover
+    }
 
     /** The [EditState.scale] that shows the whole photo inside the square. */
     fun containScale(bitmap: Bitmap, state: EditState): Float {
         val (w, h) = rotatedSize(bitmap, state)
-        val fill = maxOf(1f / w, 1f / h)
-        val contain = minOf(1f / w, 1f / h)
-        return contain / fill
+        return minOf(1f / w, 1f / h) / fillScale(bitmap, state)
     }
 
-    /** Where the photo sits in the square, as fractions of the print size: left, top, right, bottom. */
+    /** Where the box around the photo sits in the square, as fractions of the print size: left, top, right, bottom. */
     fun imageRect(bitmap: Bitmap, state: EditState): FloatArray {
         val (w, h) = rotatedSize(bitmap, state)
-        val fill = maxOf(1f / w, 1f / h) * state.scale
-        val halfW = w * fill / 2
-        val halfH = h * fill / 2
+        val s = fillScale(bitmap, state) * state.scale
+        val halfW = w * s / 2
+        val halfH = h * s / 2
         val cx = 0.5f + state.offsetX
         val cy = 0.5f + state.offsetY
         return floatArrayOf(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
@@ -82,10 +97,10 @@ object PrintRenderer {
     /** Keep the photo at least touching the square, so it cannot be dragged out of sight. */
     fun clamp(bitmap: Bitmap, state: EditState) {
         state.scale = state.scale.coerceIn(EditState.MIN_SCALE, EditState.MAX_SCALE)
-        val (w, h) = rotatedSize(bitmap, state)
-        val fill = maxOf(1f / w, 1f / h) * state.scale
-        val halfW = w * fill / 2
-        val halfH = h * fill / 2
+        state.rotation = ((state.rotation % 360f) + 360f) % 360f
+        val r = imageRect(bitmap, state)
+        val halfW = (r[2] - r[0]) / 2
+        val halfH = (r[3] - r[1]) / 2
         state.offsetX = state.offsetX.coerceIn(-0.5f - halfW + 0.1f, 0.5f + halfW - 0.1f)
         state.offsetY = state.offsetY.coerceIn(-0.5f - halfH + 0.1f, 0.5f + halfH - 0.1f)
     }
@@ -111,11 +126,10 @@ object PrintRenderer {
         canvas.save()
         canvas.clipRect(left, top, left + size, top + size)
         canvas.drawColor(Color.WHITE)
-        val (w, h) = rotatedSize(bitmap, state)
-        val fill = maxOf(size / w, size / h) * state.scale
+        val fill = fillScale(bitmap, state) * state.scale * size
         val matrix = Matrix()
         matrix.postTranslate(-bitmap.width / 2f, -bitmap.height / 2f)
-        matrix.postRotate(state.rotation.toFloat())
+        matrix.postRotate(state.rotation)
         matrix.postScale(fill, fill)
         matrix.postTranslate(left + size / 2 + state.offsetX * size, top + size / 2 + state.offsetY * size)
         paint.colorFilter = ColorMatrixColorFilter(colorMatrix(state))
