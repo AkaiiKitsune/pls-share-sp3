@@ -7,7 +7,7 @@ Deux morceaux :
 - **`app/`** : une appli Android qui se connecte toute seule au Wi-Fi de l'imprimante, le garde pour elle, et imprime une photo de la galerie (ou reçue via « Partager »).
 - **`core/`** : le protocole de l'imprimante en Kotlin pur, un client, un **simulateur d'imprimante** et une ligne de commande `instax-print` pour imprimer depuis un ordinateur (Linux, macOS, Windows).
 
-> ⚠️ **État du projet** : le protocole est celui documenté et vérifié sur une SP-3 réelle par [mbutrovich/instax_api](https://github.com/mbutrovich/instax_api) (fork de [jpwsutton/instax_api](https://github.com/jpwsutton/instax_api)). Le code de ce dépôt est validé contre des trames capturées sur une vraie imprimante et contre le simulateur, mais **il n'a pas encore été testé sur une SP-3 physique**. Premier tirage réel = premier retour bienvenu (ouvrez une issue avec le log `-v`).
+> **État du projet** : le protocole est celui documenté et vérifié par [mbutrovich/instax_api](https://github.com/mbutrovich/instax_api) (fork de [jpwsutton/instax_api](https://github.com/jpwsutton/instax_api)). **Première impression réelle confirmée** avec l'appli Android sur une SP-3 (firmware 01.02) depuis un Pixel 7 Pro. Observé au passage : juste après un tirage, l'imprimante peut ignorer puis refuser les connexions pendant environ une minute avant de répondre à nouveau. L'appli retente et affiche un message clair ; patientez une minute avant de réessayer.
 
 ## Pourquoi l'appli officielle « ne se connecte pas »
 
@@ -41,7 +41,9 @@ Ou compiler soi-même : ouvrir le dossier dans Android Studio, ou `./gradlew :ap
 1. Allumer l'imprimante (voyant Wi-Fi allumé).
 2. **1. Connecter l'imprimante** → choisir `INSTAX-XXXXXXXX` dans la fenêtre d'Android. L'appli affiche alors le modèle, le firmware, la batterie et le nombre de films restants.
 3. **2. Choisir une photo** (ou, depuis la galerie, *Partager → pls share SP-3*). L'aperçu montre exactement ce qui sortira : recadré au carré, ou photo entière avec bandes blanches (interrupteur).
-4. **3. Imprimer**. Barre de progression pendant l'envoi (1,9 Mo), puis attente de la fin du tirage (~15 s). L'appli verrouille l'imprimante pendant l'impression et la libère ensuite.
+4. **3. Imprimer**. Barre de progression pendant l'envoi (1,9 Mo, environ 25 s), puis attente de la fin du tirage (~15 s). L'appli verrouille l'imprimante pendant l'impression et la libère ensuite.
+
+L'interrupteur **mode test** envoie l'image sans lancer le tirage (aucun film consommé), pratique pour vérifier la connexion. Le **journal** en bas de l'écran garde chaque étape et chaque trame échangée, avec « Copier » et « Partager » pour signaler un problème.
 
 Si vous avez changé le PIN de l'imprimante (1111 par défaut), modifiez-le en bas de l'écran.
 
