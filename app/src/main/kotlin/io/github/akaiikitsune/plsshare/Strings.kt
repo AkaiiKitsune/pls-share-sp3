@@ -75,6 +75,8 @@ class Strings private constructor(private val fr: Boolean) {
     val sharpness get() = t("Netteté", "Sharpness")
     val vignette get() = t("Vignettage", "Vignette")
     val compare get() = t("Original (maintenir)", "Original (hold)")
+    val compareTip get() = t("Maintenir pour voir la photo sans retouche, avec le même cadrage.", "Hold to see the photo without edits, same framing.")
+    val histogramTip get() = t("Répartition des tons : rouge, vert, bleu et luminance (contour blanc).", "Tone distribution: red, green, blue and luminance (white outline).")
     val tabAdjust get() = t("Réglages", "Adjust")
     val tabTexts get() = t("Textes", "Texts")
     val addText get() = t("+ Texte", "+ Text")

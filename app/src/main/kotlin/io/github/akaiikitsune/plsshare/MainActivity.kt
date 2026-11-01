@@ -134,7 +134,6 @@ class MainActivity : Activity() {
     private lateinit var histogramView: HistogramView
     private lateinit var histogramButton: Button
     private lateinit var clippingButton: Button
-    private lateinit var clippingHint: TextView
     private var showHistogram = false
     private lateinit var adjustPanel: View
     private lateinit var textsPanel: LinearLayout
@@ -504,12 +503,11 @@ class MainActivity : Activity() {
 
     private fun updateButtons() {
         val busy = printing.get()
-        pickButton.isEnabled = !busy
-        editButton.isEnabled = !busy && photo != null
-        printButton.isEnabled = !busy && photo != null && connected != null
-        printButton.alpha = if (printButton.isEnabled) 1f else 0.45f
-        queueButton.isEnabled = photo != null
-        printQueueButton.isEnabled = !busy && connected != null && Jobs.list(Jobs.queueDir(this)).isNotEmpty()
+        ui.setEnabledLook(pickButton, !busy)
+        ui.setEnabledLook(editButton, !busy && photo != null)
+        ui.setEnabledLook(printButton, !busy && photo != null && connected != null)
+        ui.setEnabledLook(queueButton, photo != null)
+        ui.setEnabledLook(printQueueButton, !busy && connected != null && Jobs.list(Jobs.queueDir(this)).isNotEmpty())
     }
 
     private fun message(text: String) {
@@ -833,28 +831,24 @@ class MainActivity : Activity() {
         // A hairline under the fixed photo marks where the scrolling part begins.
         screen.addView(View(this).apply { setBackgroundColor(Ui.CARD_STRONG) }, LinearLayout.LayoutParams(ui.match, ui.dp(1)).apply { topMargin = ui.dp(10) })
 
-        ui.space(root, 4)
-        root.addView(ui.text(s.editorHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
         ui.space(root, 10)
 
-        // Tools, available in both tabs: compare, film preview, histogram, clipping.
-        histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
-        clippingButton = ui.softButton(s.clipping) { toggleClipping() }
-        clippingHint = ui.text(s.clippingHint, 12f, alpha = 0.6f).apply { visibility = View.GONE; gravity = Gravity.CENTER }
+        // Tools. Compare and film preview apply to both tabs; histogram and clipping live in the
+        // adjust tab only. Long-pressing a tool shows what it does.
+        histogramButton = ui.softButton(s.histogram) { toggleHistogram() }.apply { tooltipText = s.histogramTip }
+        clippingButton = ui.softButton(s.clipping) { toggleClipping() }.apply { tooltipText = s.clippingHint }
         val compareButton = ui.softButton(s.compare) {}.apply {
+            tooltipText = s.compareTip
             setOnTouchListener { v, event ->
                 when (event.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> { editorView.showOriginal = true; v.isPressed = true }
                     android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { editorView.showOriginal = false; v.isPressed = false }
                 }
-                true
+                false // let the button handle the long press (tooltip) too
             }
         }
-        filmButton = ui.softButton(s.filmPreview) { setFilmPreview(!editorView.filmPreview) }
+        filmButton = ui.softButton(s.filmPreview) { setFilmPreview(!editorView.filmPreview) }.apply { tooltipText = s.filmPreviewHint }
         root.addView(ui.row(compareButton, filmButton, gap = 6))
-        ui.space(root, 6)
-        root.addView(ui.row(histogramButton, clippingButton, gap = 6))
-        root.addView(clippingHint)
         ui.space(root, 14)
 
         tabs = ui.Segmented(listOf(s.tabAdjust, s.tabTexts)) { index -> showTab(adjust = index == 0) }
@@ -868,6 +862,8 @@ class MainActivity : Activity() {
         textsPanel.visibility = View.GONE
         root.addView(textsPanel, LinearLayout.LayoutParams(ui.match, ui.wrap))
 
+        adjust.addView(ui.row(histogramButton, clippingButton, gap = 6))
+        ui.space(adjust, 10)
         adjust.addView(ui.row(
             ui.softButton(s.rotate) { editorView.update { rotation = (Math.round(rotation / 90f) + 1) * 90f % 360f } },
             ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
@@ -965,7 +961,11 @@ class MainActivity : Activity() {
         textsPanel.visibility = if (adjust) View.GONE else View.VISIBLE
         tabs.select(if (adjust) 0 else 1)
         editorView.overlayMode = !adjust
-        if (!adjust && editorView.selectedOverlay == null) editorView.selectedOverlay = editorView.state.overlays.lastOrNull()
+        if (!adjust) {
+            if (showHistogram) toggleHistogram()
+            if (editorView.showClipping) toggleClipping()
+            editorView.selectedOverlay = editorView.selectedOverlay ?: editorView.state.overlays.lastOrNull()
+        }
         refreshOverlayPanel()
     }
 
@@ -1318,7 +1318,6 @@ class MainActivity : Activity() {
     private fun toggleClipping() {
         editorView.showClipping = !editorView.showClipping
         clippingButton.setTextColor(if (editorView.showClipping) ui.accent else labelColor)
-        clippingHint.visibility = if (editorView.showClipping) View.VISIBLE else View.GONE
     }
 
     private fun syncPresets() {

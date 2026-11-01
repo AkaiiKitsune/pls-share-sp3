@@ -163,6 +163,12 @@ class Ui(private val context: Context) {
         }
     }
 
+    /** Enable or disable a button with a visible change, since the custom backgrounds have no disabled state. */
+    fun setEnabledLook(view: View, enabled: Boolean) {
+        view.isEnabled = enabled
+        view.alpha = if (enabled) 1f else 0.4f
+    }
+
     /** A small round status dot. */
     fun dot(color: Int) = View(context).apply {
         background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
