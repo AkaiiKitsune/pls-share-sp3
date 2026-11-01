@@ -33,14 +33,17 @@ class EditState {
     /** 0..2, 1 = unchanged. */
     var saturation = 1f
 
+    /** A [Filters] preset id, applied before the adjustments above. */
+    var filter = "normal"
+
     fun reset() {
         scale = 1f; offsetX = 0f; offsetY = 0f; rotation = 0
-        brightness = 0f; contrast = 0f; saturation = 1f
+        brightness = 0f; contrast = 0f; saturation = 1f; filter = "normal"
     }
 
     fun copyFrom(other: EditState) {
         scale = other.scale; offsetX = other.offsetX; offsetY = other.offsetY; rotation = other.rotation
-        brightness = other.brightness; contrast = other.contrast; saturation = other.saturation
+        brightness = other.brightness; contrast = other.contrast; saturation = other.saturation; filter = other.filter
     }
 
     companion object {
@@ -77,8 +80,9 @@ object PrintRenderer {
     }
 
     fun colorMatrix(state: EditState): ColorMatrix {
-        val matrix = ColorMatrix()
-        matrix.setSaturation(state.saturation)
+        val matrix = ColorMatrix(Filters.byId(state.filter).matrix)
+        val saturation = ColorMatrix().apply { setSaturation(state.saturation) }
+        matrix.postConcat(saturation)
         val c = 1f + state.contrast / 100f
         val b = state.brightness / 100f * 255f
         val t = (1f - c) * 128f + b

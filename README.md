@@ -60,6 +60,21 @@ Dans le menu ⋮, **Mode debug** affiche : l'adresse de l'imprimante, un **mode 
 - SP-1 non supportée (format JPEG propriétaire, différent).
 - iOS : impossible avec cette approche (pas de sockets TCP bruts liés à un réseau depuis une appli tierce sans NetworkExtension). Sur iPhone, utilisez un ordinateur avec `instax-print`.
 
+### Signature (à faire une fois, par le propriétaire du dépôt)
+
+La CI signe l'APK avec une clé fournie par les *secrets* GitHub Actions. Sans secret, elle signe avec une clé jetable et la mise à jour intégrée ne pourra pas s'installer par-dessus (il faudra désinstaller / réinstaller à chaque fois).
+
+1. Générer une clé (une seule fois, à garder précieusement) :
+   ```bash
+   keytool -genkeypair -keystore release.jks -storetype PKCS12 -alias pls-share-sp3 -keyalg RSA -keysize 2048 -validity 36500
+   ```
+2. Dans le dépôt GitHub → Settings → Secrets and variables → Actions, créer :
+   - `APP_KEYSTORE_BASE64` : le contenu de `base64 -w0 release.jks`
+   - `APP_KEYSTORE_PASSWORD` : le mot de passe choisi
+   - `APP_KEY_ALIAS` : `pls-share-sp3`
+   - `APP_KEY_PASSWORD` : le mot de passe de la clé (le même, avec PKCS12)
+3. Relancer un build : l'étape « Restore the signing key » confirme « Signing with the repository's release key ». Désinstaller l'ancienne version du téléphone, installer celle-ci : les suivantes se feront depuis l'appli.
+
 ## Ligne de commande (ordinateur)
 
 Prérequis : Java 17+. Rejoindre d'abord le Wi-Fi `INSTAX-XXXXXXXX` de l'imprimante.

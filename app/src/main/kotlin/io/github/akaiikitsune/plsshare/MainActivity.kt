@@ -25,6 +25,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
@@ -67,6 +68,8 @@ class MainActivity : Activity() {
         private const val MENU_GUIDE = 1
         private const val MENU_PIN = 2
         private const val MENU_DEBUG = 3
+        private const val MENU_UPDATE = 4
+        private const val THUMB_SIZE = 96
     }
 
     private val s = Strings.forDefaultLocale()
@@ -76,6 +79,7 @@ class MainActivity : Activity() {
 
     private lateinit var network: PrinterNetwork
     private lateinit var watcher: PrinterWatcher
+    private lateinit var updater: Updater
     private lateinit var prefs: SharedPreferences
 
     private lateinit var container: FrameLayout
@@ -106,6 +110,8 @@ class MainActivity : Activity() {
     private lateinit var brightnessBar: SeekBar
     private lateinit var contrastBar: SeekBar
     private lateinit var saturationBar: SeekBar
+    private lateinit var presetRow: LinearLayout
+    private val presetTiles = LinkedHashMap<String, Pair<ImageView, TextView>>()
 
     private var photo: Bitmap? = null
     private val editState = EditState()
@@ -140,6 +146,9 @@ class MainActivity : Activity() {
         watcher = PrinterWatcher(network, { probePrinter() }, ::onWatcherState)
         onWatcherState(PrinterWatcher.State.NoWifi)
         handleShareIntent(intent)
+
+        updater = Updater(this, s) { journal(it) }
+        mainHandler.postDelayed({ updater.checkDaily() }, 3_000)
     }
 
     override fun onResume() {
@@ -159,6 +168,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        updater.release()
         if (!printing.get()) network.disconnect()
     }
 
@@ -299,11 +309,13 @@ class MainActivity : Activity() {
         val menu = PopupMenu(this, anchor)
         menu.menu.add(0, MENU_GUIDE, 0, s.menuGuide)
         menu.menu.add(0, MENU_PIN, 1, s.menuPin)
-        menu.menu.add(0, MENU_DEBUG, 2, s.menuDebug).apply { isCheckable = true; isChecked = debug }
+        menu.menu.add(0, MENU_UPDATE, 2, s.menuUpdate)
+        menu.menu.add(0, MENU_DEBUG, 3, s.menuDebug).apply { isCheckable = true; isChecked = debug }
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_GUIDE -> show(guideView)
                 MENU_PIN -> askPin()
+                MENU_UPDATE -> updater.check(interactive = true) { message(it) }
                 MENU_DEBUG -> {
                     debug = !debug
                     prefs.edit().putBoolean(PREF_DEBUG, debug).apply()
@@ -536,9 +548,31 @@ class MainActivity : Activity() {
             ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.whole) { editorView.update { scale = PrintRenderer.containScale(editorView.bitmap!!, this); offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() },
-            ui.softButton(s.reset) { editorView.update { reset() }; syncSliders() },
+            ui.softButton(s.reset) { editorView.update { reset() }; syncSliders(); syncPresets() },
             gap = 6,
         ))
+        ui.space(root, 16)
+
+        root.addView(ui.text(s.filters, 13f, alpha = 0.7f))
+        ui.space(root, 6)
+        presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (preset in Filters.presets) {
+            val thumb = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = ui.rounded(Ui.CARD, 14)
+                clipToOutline = true
+            }
+            val label = ui.text(s.filterName(preset.id), 12f).apply { gravity = Gravity.CENTER }
+            val tile = ui.column().apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                addView(thumb, LinearLayout.LayoutParams(ui.dp(68), ui.dp(68)))
+                addView(label, LinearLayout.LayoutParams(ui.dp(68), ui.wrap).apply { topMargin = ui.dp(4) })
+                setOnClickListener { editorView.update { filter = preset.id }; syncPresets() }
+            }
+            presetTiles[preset.id] = thumb to label
+            presetRow.addView(tile, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(10) })
+        }
+        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
         ui.space(root, 16)
 
         brightnessBar = slider(root, s.brightness) { v -> editorView.update { brightness = v - 100f } }
@@ -573,11 +607,29 @@ class MainActivity : Activity() {
         saturationBar.progress = (editorView.state.saturation * 100f).toInt()
     }
 
+    private fun syncPresets() {
+        val selected = editorView.state.filter
+        for ((id, views) in presetTiles) {
+            val (thumb, label) = views
+            thumb.alpha = if (id == selected) 1f else 0.55f
+            label.typeface = if (id == selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            label.setTextColor(if (id == selected) Ui.ACCENT else label.currentTextColor and 0x00FFFFFF or (0xFF shl 24))
+        }
+    }
+
+    /** Small filtered previews of the current photo for the preset row. */
+    private fun buildThumbnails(bitmap: Bitmap) {
+        val base = PrintRenderer.render(bitmap, EditState(), THUMB_SIZE)
+        for ((id, views) in presetTiles) views.first.setImageBitmap(Filters.thumbnail(base, Filters.byId(id)))
+    }
+
     private fun openEditor() {
         val bitmap = photo ?: return pickPhoto()
         editorView.bitmap = bitmap
         editorView.state.copyFrom(editState)
+        buildThumbnails(bitmap)
         syncSliders()
+        syncPresets()
         show(editorScreen)
     }
 
@@ -608,6 +660,8 @@ class MainActivity : Activity() {
         }
         ui.space(root, 8)
         root.addView(ui.text(s.guideNotes, 13f, alpha = 0.7f))
+        ui.space(root, 20)
+        root.addView(ui.card(ui.text(s.guideFilmTitle, 16f, bold = true), ui.text(s.guideFilm, 14f).apply { setPadding(0, ui.dp(6), 0, 0) }))
         ui.space(root, 20)
         root.addView(ui.primaryButton(s.wifiSettings) { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 8)

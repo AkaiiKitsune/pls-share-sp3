@@ -93,7 +93,44 @@ class Strings private constructor(private val fr: Boolean) {
         "Les données mobiles peuvent rester activées. Le réglage ne se fait qu'une fois : les fois suivantes, allumez l'imprimante, rejoignez son Wi-Fi, imprimez.",
         "Mobile data can stay on. The setup is done once: next time, switch the printer on, join its Wi-Fi, print.",
     )
+    val guideFilmTitle get() = t("Quel film ?", "Which film?")
+    val guideFilm get() = t(
+        "La SP-3 prend le film instax SQUARE (packs de 10, vendus par deux). Toutes les variantes passent, seul le cadre change. " +
+            "Pour imprimer en noir et blanc, le film SQUARE Monochrome donne des gris vraiment neutres et des noirs plus profonds : " +
+            "sur du film couleur, le noir et blanc prend souvent une légère dominante. Avec du Monochrome, saturation et filtres couleur n'ont plus d'effet, gardez luminosité et contraste.",
+        "The SP-3 takes instax SQUARE film (packs of 10, sold in twin packs). Every variant works, only the frame differs. " +
+            "For black and white, SQUARE Monochrome film gives truly neutral greys and deeper blacks: on colour film, black and white often picks up a slight tint. " +
+            "With Monochrome, saturation and colour filters have no effect; keep brightness and contrast.",
+    )
     val back get() = t("Retour", "Back")
+
+    // Filters
+    val filters get() = t("Filtres", "Filters")
+    fun filterName(id: String): String = when (id) {
+        "normal" -> t("Original", "Original")
+        "vivid" -> t("Vif", "Vivid")
+        "warm" -> t("Chaud", "Warm")
+        "cool" -> t("Froid", "Cool")
+        "fade" -> t("Délavé", "Fade")
+        "retro" -> t("Rétro", "Retro")
+        "sepia" -> t("Sépia", "Sepia")
+        "mono" -> t("Mono", "Mono")
+        "noir" -> t("Noir", "Noir")
+        "pop" -> t("Pop", "Pop")
+        else -> id
+    }
+
+    // Updates
+    val menuUpdate get() = t("Vérifier les mises à jour", "Check for updates")
+    val updateChecking get() = t("Recherche de mise à jour…", "Checking for updates…")
+    val updateNone get() = t("Vous avez la dernière version (build %d).", "You have the latest version (build %d).")
+    val updateError get() = t("Impossible de vérifier les mises à jour (%s).", "Could not check for updates (%s).")
+    val updateTitle get() = t("Nouvelle version", "New version")
+    val updateBody get() = t("%s (build %d) est disponible, vous avez le build %d. Télécharger et installer ?", "%s (build %d) is available, you have build %d. Download and install?")
+    val updateInstall get() = t("Installer", "Install")
+    val updateLater get() = t("Plus tard", "Later")
+    val updateDownloading get() = t("Téléchargement de la mise à jour…", "Downloading the update…")
+    val updateFailed get() = t("Le téléchargement a échoué.", "The download failed.")
 
     // Debug
     val debugTitle get() = "Debug"
