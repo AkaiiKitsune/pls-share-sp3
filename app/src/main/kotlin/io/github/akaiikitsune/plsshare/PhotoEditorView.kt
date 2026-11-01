@@ -35,7 +35,18 @@ class PhotoEditorView(context: Context) : View(context) {
     /** Simulate the film's rendering on screen (display only). */
     var filmPreview = false
         set(value) { field = value; frameDirty = true; invalidate() }
-    private val filmPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = android.graphics.ColorMatrixColorFilter(PrintRenderer.filmLook) }
+
+    /** The film model used by the simulation, and whether prints are compensated through its inverse. */
+    var film: FilmModel = FilmModel()
+        set(value) { field = value; frameDirty = true; invalidate() }
+    var compensated = false
+        set(value) { field = value; frameDirty = true; invalidate() }
+
+    /** What the print will look like: the film applied to the data we send (compensated or not). */
+    private fun simulateFilm(pixels: IntArray) {
+        if (compensated) film.compensate(pixels)
+        film.simulate(pixels)
+    }
 
     /** Show the photo without any look (same framing), while a "compare" button is held. */
     var showOriginal = false
@@ -287,10 +298,9 @@ class PhotoEditorView(context: Context) : View(context) {
         val pixels = framePixels!!
         PrintRenderer.draw(Canvas(f), b, state, 0f, 0f, size.toFloat())
         f.getPixels(pixels, 0, size, 0, 0, size, size)
-        if (state.needsPixelPass) {
-            Processing.apply(pixels, size, size, state, sharpen)
-            f.setPixels(pixels, 0, size, 0, 0, size, size)
-        }
+        if (state.needsPixelPass) Processing.apply(pixels, size, size, state, sharpen)
+        if (filmPreview) simulateFilm(pixels)
+        if (state.needsPixelPass || filmPreview) f.setPixels(pixels, 0, size, 0, 0, size, size)
         if (showClipping) {
             val o = overlay ?: Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { overlay = it }
             val op = overlayPixels?.takeIf { it.size == pixels.size } ?: IntArray(pixels.size).also { overlayPixels = it }
@@ -449,8 +459,12 @@ class PhotoEditorView(context: Context) : View(context) {
                 val o = originalFrame?.takeIf { it.width == previewSize }
                     ?: Bitmap.createBitmap(previewSize, previewSize, Bitmap.Config.ARGB_8888).also { originalFrame = it }
                 PrintRenderer.draw(Canvas(o), b, neutral, 0f, 0f, previewSize.toFloat())
+                val px = IntArray(previewSize * previewSize)
+                o.getPixels(px, 0, previewSize, 0, 0, previewSize, previewSize)
+                simulateFilm(px)
+                o.setPixels(px, 0, previewSize, 0, 0, previewSize, previewSize)
                 dest.set(l, t, l + size, t + size)
-                canvas.drawBitmap(o, null, dest, filmPaint)
+                canvas.drawBitmap(o, null, dest, scaledPaint)
             } else {
                 PrintRenderer.draw(canvas, b, neutral, l, t, size)
             }
@@ -466,7 +480,7 @@ class PhotoEditorView(context: Context) : View(context) {
                 renderFrame(b, renderSize, sharpen = !busy)
             }
             dest.set(l, t, l + size, t + size)
-            canvas.drawBitmap(frame!!, null, dest, if (filmPreview) filmPaint else scaledPaint)
+            canvas.drawBitmap(frame!!, null, dest, scaledPaint)
             if (showClipping) overlay?.let {
                 clipPaint.alpha = if (blinkOn) 230 else 90
                 canvas.drawBitmap(it, null, dest, clipPaint)

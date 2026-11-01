@@ -68,7 +68,10 @@ class MainActivity : Activity() {
         private const val PREF_DEBUG = "debug"
         private const val PREF_FILM = "filmPreview"
         private const val PREF_QUEUE = "queue"
+        private const val PREF_COMPENSATE = "compensate"
         private const val MENU_QUEUE = 7
+        private const val MENU_CALIBRATE = 8
+        private const val MENU_COMPENSATE = 9
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
 
@@ -100,6 +103,11 @@ class MainActivity : Activity() {
     private lateinit var editorScreen: View
     private lateinit var guideView: View
     private lateinit var historyView: View
+    private lateinit var calibrateView: View
+    private lateinit var chartView: ImageView
+    private lateinit var film: FilmModel
+    private var compensate = false
+    private val chartBase by lazy { TestChart.render(400) }
     private lateinit var historyList: LinearLayout
     private lateinit var queueRow: LinearLayout
     private lateinit var queueEmptyText: TextView
@@ -187,6 +195,8 @@ class MainActivity : Activity() {
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         debug = prefs.getBoolean(PREF_DEBUG, false)
         queueEnabled = prefs.getBoolean(PREF_QUEUE, false)
+        film = FilmModel.load(prefs)
+        compensate = prefs.getBoolean(PREF_COMPENSATE, false)
 
         container = FrameLayout(this)
         // Android 15 draws apps edge to edge: keep the content clear of the status bar, the
@@ -205,7 +215,9 @@ class MainActivity : Activity() {
         editorScreen = buildEditor()
         guideView = buildGuide()
         historyView = buildHistory()
+        calibrateView = buildCalibration()
         container.addView(homeView)
+        applyFilmModel()
         setContentView(container)
         applyDebugVisibility()
 
@@ -412,8 +424,10 @@ class MainActivity : Activity() {
         menu.menu.add(0, MENU_HISTORY, 2, s.menuHistory)
         menu.menu.add(0, MENU_EXPORT, 3, s.menuExport)
         menu.menu.add(0, MENU_UPDATE, 4, s.menuUpdate)
-        menu.menu.add(0, MENU_QUEUE, 5, s.menuQueue).apply { isCheckable = true; isChecked = queueEnabled }
-        menu.menu.add(0, MENU_DEBUG, 6, s.menuDebug).apply { isCheckable = true; isChecked = debug }
+        menu.menu.add(0, MENU_CALIBRATE, 5, s.menuCalibrate)
+        menu.menu.add(0, MENU_COMPENSATE, 6, s.menuCompensate).apply { isCheckable = true; isChecked = compensate }
+        menu.menu.add(0, MENU_QUEUE, 7, s.menuQueue).apply { isCheckable = true; isChecked = queueEnabled }
+        menu.menu.add(0, MENU_DEBUG, 8, s.menuDebug).apply { isCheckable = true; isChecked = debug }
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_GUIDE -> show(guideView)
@@ -425,6 +439,13 @@ class MainActivity : Activity() {
                     debug = !debug
                     prefs.edit().putBoolean(PREF_DEBUG, debug).apply()
                     applyDebugVisibility()
+                }
+                MENU_CALIBRATE -> { refreshChart(); show(calibrateView) }
+                MENU_COMPENSATE -> {
+                    compensate = !compensate
+                    prefs.edit().putBoolean(PREF_COMPENSATE, compensate).apply()
+                    applyFilmModel()
+                    message(if (compensate) s.compensationOn else s.compensationOff)
                 }
                 MENU_QUEUE -> {
                     queueEnabled = !queueEnabled
@@ -618,7 +639,7 @@ class MainActivity : Activity() {
                 try {
                     val bitmap = Photos.load(contentResolver, uri)
                     val state = EditState().apply { copyLookFrom(look); photoDate = Photos.exifDate(contentResolver, uri) }
-                    val rendered = PrintRenderer.render(bitmap, state, PREVIEW_SIZE)
+                    val rendered = renderForPrint(bitmap, state)
                     Jobs.save(Jobs.queueDir(this), rendered)
                     rendered.recycle()
                     bitmap.recycle()
@@ -639,7 +660,7 @@ class MainActivity : Activity() {
 
     private fun addCurrentToQueue() {
         val bitmap = photo ?: return message(s.noPhoto)
-        Jobs.save(Jobs.queueDir(this), PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
+        Jobs.save(Jobs.queueDir(this), renderForPrint(bitmap, editState))
         refreshQueue()
         message(s.queued.format(Jobs.list(Jobs.queueDir(this)).size))
     }
@@ -679,6 +700,98 @@ class MainActivity : Activity() {
         val files = Jobs.list(Jobs.queueDir(this))
         if (files.isEmpty()) return
         startPrinting(files)
+    }
+
+    // ---------------------------------------------------------------- Film calibration
+
+    private fun buildCalibration(): View {
+        val root = ui.column(20)
+        root.addView(ui.text(s.calibrateIntro, 14f))
+        ui.space(root, 12)
+        root.addView(ui.text(s.chartSimulated, 13f, alpha = 0.7f))
+        ui.space(root, 6)
+        chartView = object : ImageView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val w = MeasureSpec.getSize(widthMeasureSpec)
+                setMeasuredDimension(w, w)
+            }
+        }.apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = ui.rounded(Ui.CARD, 12)
+            clipToOutline = true
+        }
+        root.addView(chartView, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 10)
+        root.addView(ui.softButton(s.printChart) { printChart() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 16)
+
+        fun calSlider(label: String, min: Int, max: Int, read: () -> Int, write: (Int) -> Unit) {
+            val value = ui.text(read().toString(), 13f, alpha = 0.7f).apply { gravity = Gravity.END }
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(ui.text(label, 13f, alpha = 0.7f), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+                addView(value, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+            }
+            root.addView(header)
+            val bar = SeekBar(this).apply {
+                this.max = max - min
+                progress = read() - min
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        value.text = (progress + min).toString()
+                        if (fromUser) { write(progress + min); onFilmChanged() }
+                    }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar) {}
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {}
+                })
+            }
+            calBars += bar to { read() - min }
+            root.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
+            ui.space(root, 6)
+        }
+        calSlider(s.calExposure, -150, 50, { Math.round(film.exposure * 100f) }) { film.exposure = it / 100f }
+        calSlider(s.calContrast, 80, 180, { Math.round(film.contrast * 100f) }) { film.contrast = it / 100f }
+        calSlider(s.calBlack, 0, 25, { Math.round(film.blackClip * 100f) }) { film.blackClip = it / 100f }
+        calSlider(s.calWhite, 75, 100, { Math.round(film.whiteClip * 100f) }) { film.whiteClip = it / 100f }
+        calSlider(s.calSaturation, 60, 160, { Math.round(film.saturation * 100f) }) { film.saturation = it / 100f }
+        calSlider(s.calWarmth, -60, 60, { Math.round(film.warmth * 100f) }) { film.warmth = it / 100f }
+        calSlider(s.calTint, -60, 60, { Math.round(film.tint * 100f) }) { film.tint = it / 100f }
+        calSlider(s.calBlue, 0, 100, { Math.round(film.blueDarkening * 100f) }) { film.blueDarkening = it / 100f }
+        ui.space(root, 8)
+        root.addView(ui.softButton(s.calReset) {
+            film = FilmModel()
+            film.save(prefs)
+            syncCalibration()
+            onFilmChanged()
+        }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 16)
+        root.addView(ui.text(s.compensateHint, 13f, alpha = 0.7f))
+        ui.space(root, 16)
+        return fixedHeaderScreen(titleBar(s.calibrateTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 }), root)
+    }
+
+    private val calBars = ArrayList<Pair<SeekBar, () -> Int>>()
+
+    private fun syncCalibration() {
+        for ((bar, read) in calBars) bar.progress = read()
+    }
+
+    private fun onFilmChanged() {
+        film.save(prefs)
+        applyFilmModel()
+        refreshChart()
+    }
+
+    private fun refreshChart() {
+        // The chart is always printed raw, so the simulation shows it without compensation.
+        chartView.setImageBitmap(film.simulated(chartBase))
+    }
+
+    private fun printChart() {
+        if (connected == null) return message(s.notConnectedYet)
+        val file = Jobs.save(Jobs.queueDir(this), TestChart.render(PREVIEW_SIZE))
+        startPrinting(listOf(file), archive = false)
     }
 
     // ---------------------------------------------------------------- History and export
@@ -1390,11 +1503,29 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- Printing
 
+    /** The data for the printer: the look, then the inverse film model when compensation is on. */
+    private fun renderForPrint(bitmap: Bitmap, state: EditState): Bitmap {
+        val rendered = PrintRenderer.render(bitmap, state, PREVIEW_SIZE)
+        if (!compensate) return rendered
+        val pixels = IntArray(PREVIEW_SIZE * PREVIEW_SIZE)
+        rendered.getPixels(pixels, 0, PREVIEW_SIZE, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE)
+        film.compensate(pixels)
+        rendered.setPixels(pixels, 0, PREVIEW_SIZE, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE)
+        return rendered
+    }
+
+    private fun applyFilmModel() {
+        previewImage.film = film
+        previewImage.compensated = compensate
+        editorView.film = film
+        editorView.compensated = compensate
+    }
+
     private fun print() {
         val bitmap = photo ?: return message(s.noPhoto)
         if (connected == null) return message(s.notConnectedYet)
         if (printing.get()) return message(s.busy)
-        val file = Jobs.save(Jobs.queueDir(this), PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
+        val file = Jobs.save(Jobs.queueDir(this), renderForPrint(bitmap, editState))
         startPrinting(listOf(file))
     }
 

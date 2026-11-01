@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.RectF
 import android.view.View
@@ -15,17 +14,22 @@ import android.view.View
  */
 class PrintPreviewView(context: Context) : View(context) {
     var bitmap: Bitmap? = null
-        set(value) { field = value; invalidate() }
+        set(value) { field = value; simulated = null; invalidate() }
 
     var filmPreview = false
         set(value) { field = value; invalidate() }
+
+    var film: FilmModel = FilmModel()
+        set(value) { field = value; simulated = null; invalidate() }
+    var compensated = false
+        set(value) { field = value; simulated = null; invalidate() }
+    private var simulated: Bitmap? = null
 
     var onClick: (() -> Unit)? = null
 
     private val paper = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x30000000 }
     private val photo = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val film = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = ColorMatrixColorFilter(PrintRenderer.filmLook) }
     private val dest = RectF()
     private val card = RectF()
 
@@ -38,6 +42,16 @@ class PrintPreviewView(context: Context) : View(context) {
 
     init {
         setOnClickListener { onClick?.invoke() }
+    }
+
+    private fun simulate(source: Bitmap): Bitmap {
+        val w = source.width
+        val h = source.height
+        val pixels = IntArray(w * h)
+        source.getPixels(pixels, 0, w, 0, 0, w, h)
+        if (compensated) film.compensate(pixels)
+        film.simulate(pixels)
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { setPixels(pixels, 0, w, 0, 0, w, h) }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -62,6 +76,7 @@ class PrintPreviewView(context: Context) : View(context) {
         val il = left + (WIDTH_MM - IMAGE_MM) / 2 * scale
         val it = top + TOP_MM * scale
         dest.set(il, it, il + side, it + side)
-        canvas.drawBitmap(b, null, dest, if (filmPreview) film else photo)
+        val shown = if (filmPreview) simulated ?: simulate(b).also { simulated = it } else b
+        canvas.drawBitmap(shown, null, dest, photo)
     }
 }

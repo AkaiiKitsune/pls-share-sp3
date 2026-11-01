@@ -274,22 +274,6 @@ object PrintRenderer {
         canvas.drawRect(left, top, left + width, top + height, p)
     }
 
-    /**
-     * How instax colour film renders the screen image, from published observations (display only,
-     * never applied to the printed data):
-     * - prints come out darker than the screen, with midtones sliding into shadow (fujix-forum, SP-3);
-     * - more contrast and saturation than the screen, detail lost in high-contrast scenes
-     *   (photographyblog, SP-3 review);
-     * - little latitude: shadows block up and highlights clip early (Emulsive, SP-2 + Mini film;
-     *   Digital Trends, Mini 13);
-     * - blues come out noticeably darker, warm colours very slightly green (Emulsive).
-     * Hence: darker, steeper midtones (which clips both ends), a touch more saturation, blue
-     * channel pulled down, green nudged up. Tune against real prints if yours differ.
-     */
-    val filmLook: ColorMatrix = Filters.look(
-        contrast = 1.14f, brightness = -14f, saturation = 1.08f,
-        gainR = 1.0f, gainG = 1.015f, gainB = 0.91f,
-    )
 
     private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val clipPath = android.graphics.Path()

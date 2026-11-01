@@ -152,6 +152,42 @@ class Strings private constructor(private val fr: Boolean) {
     val deleteEntry get() = t("Supprimer cet élément ?", "Delete this item?")
     val notificationsHint get() = t("Autorisez les notifications pour suivre l'impression quand l'appli est en arrière-plan.", "Allow notifications to follow printing while the app is in the background.")
 
+    // Film calibration
+    val menuCalibrate get() = t("Calibrer l'aperçu film…", "Calibrate the film preview…")
+    val menuCompensate get() = t("Compenser le tirage", "Compensate prints")
+    val calibrateTitle get() = t("Calibrer l'aperçu film", "Calibrate the film preview")
+    val calibrateIntro get() = t(
+        "L'aperçu film est un modèle : tirage plus sombre, latitude réduite, plus de contraste et de saturation, bleus assombris. " +
+            "Les valeurs de départ viennent d'observations publiées, mais chaque imprimante et chaque lot de film diffèrent. " +
+            "Pour l'ajuster : imprimez la mire ci-dessous, posez le tirage à côté du téléphone à la lumière du jour, " +
+            "puis réglez les curseurs jusqu'à ce que la mire simulée à l'écran ressemble au tirage. " +
+            "Commencez par les gris (exposition, puis noirs, blancs et contraste), puis la saturation et la dominante, puis le patch bleu.",
+        "The film preview is a model: darker print, reduced latitude, more contrast and saturation, darker blues. " +
+            "The starting values come from published observations, but every printer and film batch differs. " +
+            "To fit it: print the chart below, put the print next to the phone in daylight, " +
+            "then adjust the sliders until the simulated chart on screen looks like the print. " +
+            "Start with the greys (exposure, then blacks, whites and contrast), then saturation and cast, then the blue patch.",
+    )
+    val chartSimulated get() = t("Mire simulée (ce que le tirage devrait montrer)", "Simulated chart (what the print should look like)")
+    val printChart get() = t("Imprimer la mire (sans compensation)", "Print the chart (no compensation)")
+    val calExposure get() = t("Exposition (IL)", "Exposure (stops)")
+    val calContrast get() = t("Contraste des demi-tons", "Midtone contrast")
+    val calBlack get() = t("Seuil des noirs (%)", "Black threshold (%)")
+    val calWhite get() = t("Seuil des blancs (%)", "White threshold (%)")
+    val calSaturation get() = t("Saturation", "Saturation")
+    val calWarmth get() = t("Dominante bleu ↔ jaune", "Blue ↔ yellow cast")
+    val calTint get() = t("Dominante vert ↔ magenta", "Green ↔ magenta cast")
+    val calBlue get() = t("Assombrissement des bleus", "Blue darkening")
+    val calReset get() = t("Valeurs par défaut", "Default values")
+    val compensateHint get() = t(
+        "Compenser le tirage applique l'inverse du modèle aux données envoyées à l'imprimante (plus clair, moins contrasté, dominante corrigée), " +
+            "pour que le tirage ressemble à l'écran. Ce que le film ne peut pas rendre (extrêmes écrêtés) reste perdu. La mire s'imprime toujours sans compensation.",
+        "Compensating prints applies the inverse of the model to the data sent to the printer (brighter, less contrast, corrected cast), " +
+            "so the print looks like the screen. What the film cannot render (clipped extremes) stays lost. The chart always prints uncompensated.",
+    )
+    val compensationOn get() = t("Compensation d'impression activée.", "Print compensation on.")
+    val compensationOff get() = t("Compensation d'impression désactivée.", "Print compensation off.")
+
     // Menu
     val menuGuide get() = t("Guide de connexion", "Connection guide")
     val menuPin get() = t("PIN de l'imprimante…", "Printer PIN…")
