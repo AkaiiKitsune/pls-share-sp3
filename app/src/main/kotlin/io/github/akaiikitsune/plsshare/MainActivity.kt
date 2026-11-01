@@ -129,6 +129,7 @@ class MainActivity : Activity() {
     private lateinit var blackWhiteButton: Button
     private val fontButtons = LinkedHashMap<Overlay.Font, Button>()
     private lateinit var overlayMarginBar: SeekBar
+    private lateinit var overlaySizeValue: TextView
     private lateinit var overlayMarginValue: TextView
     private var photoDate: Long? = null
     private lateinit var presetRow: LinearLayout
@@ -726,11 +727,18 @@ class MainActivity : Activity() {
         }
         overlayEditor.addView(overlayTextField)
         ui.space(overlayEditor, 8)
-        overlayEditor.addView(ui.text(s.overlaySize, 13f, alpha = 0.7f))
+        val sizeHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ui.text(s.overlaySize, 13f, alpha = 0.7f), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            overlaySizeValue = ui.text("", 13f, bold = true, color = ui.accent).apply { setOnClickListener { askOverlaySize() } }
+            addView(overlaySizeValue, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+        }
+        overlayEditor.addView(sizeHeader)
         overlaySizeBar = SeekBar(this).apply {
             max = 235
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    overlaySizeValue.text = "${Math.round((progress + 15) / 1000f * PREVIEW_SIZE)} px"
                     if (!fromUser) return
                     val o = editorView.selectedOverlay ?: return
                     o.size = (progress + 15) / 1000f
@@ -820,6 +828,27 @@ class MainActivity : Activity() {
         refreshOverlayPanel()
     }
 
+    /** Type the text height in print pixels directly. */
+    private fun askOverlaySize() {
+        val o = editorView.selectedOverlay ?: return
+        val field = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(Math.round(o.size * PREVIEW_SIZE).toString())
+        }
+        AlertDialog.Builder(this)
+            .setTitle(s.overlaySizePrompt)
+            .setView(field)
+            .setNegativeButton(s.cancel, null)
+            .setPositiveButton(s.ok) { _, _ ->
+                val px = field.text.toString().trim().toIntOrNull()?.coerceIn(12, 200) ?: return@setPositiveButton
+                o.size = px / PREVIEW_SIZE.toFloat()
+                o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
+                editorView.overlaysChanged()
+                refreshOverlayPanel()
+            }
+            .show()
+    }
+
     private fun setOverlayFont(font: Overlay.Font) {
         val o = editorView.selectedOverlay ?: return
         o.font = font
@@ -881,6 +910,7 @@ class MainActivity : Activity() {
         overlayTextField.visibility = if (o.kind == Overlay.Kind.TEXT) View.VISIBLE else View.GONE
         if (o.kind == Overlay.Kind.TEXT && overlayTextField.text.toString() != o.text) overlayTextField.setText(o.text)
         overlaySizeBar.progress = (o.size * 1000f).toInt() - 15
+        overlaySizeValue.text = "${Math.round(o.size * PREVIEW_SIZE)} px"
         overlayDarkSwitch.isChecked = o.dark
         overlayMarginBar.progress = Math.round(o.margin * 100f)
         overlayMarginValue.text = "${overlayMarginBar.progress} %"
