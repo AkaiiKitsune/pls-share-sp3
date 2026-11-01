@@ -41,6 +41,7 @@ import instax.InstaxPrinter
 import instax.PrintEvent
 import instax.PrinterException
 import instax.PrinterInfo
+import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -57,6 +58,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : Activity() {
     companion object {
         private const val REQUEST_PICK = 1
+        private const val REQUEST_PICK_MANY = 2
+        private const val REQUEST_NOTIFICATIONS = 3
+        private const val MENU_HISTORY = 5
+        private const val MENU_EXPORT = 6
         private const val PREFS = "settings"
         private const val PREF_PIN = "pin"
         private const val PREF_HOST = "host"
@@ -92,6 +97,12 @@ class MainActivity : Activity() {
     private lateinit var homeView: View
     private lateinit var editorScreen: View
     private lateinit var guideView: View
+    private lateinit var historyView: View
+    private lateinit var historyList: LinearLayout
+    private lateinit var queueRow: LinearLayout
+    private lateinit var queueEmptyText: TextView
+    private lateinit var printQueueButton: Button
+    private lateinit var queueButton: Button
 
     // Home widgets
     private lateinit var statusDot: View
@@ -189,6 +200,7 @@ class MainActivity : Activity() {
         homeView = buildHome()
         editorScreen = buildEditor()
         guideView = buildGuide()
+        historyView = buildHistory()
         container.addView(homeView)
         setContentView(container)
         applyDebugVisibility()
@@ -204,11 +216,15 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         watcher.start()
+        PrintService.listener = serviceListener
+        applyServiceStatus(PrintService.status)
+        refreshQueue()
     }
 
     override fun onPause() {
         super.onPause()
         watcher.stop()
+        if (PrintService.listener === serviceListener) PrintService.listener = null
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -299,6 +315,9 @@ class MainActivity : Activity() {
 
         printButton = ui.primaryButton(s.print) { print() }
         root.addView(printButton, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 8)
+        queueButton = ui.softButton(s.addToQueue) { addCurrentToQueue() }
+        root.addView(queueButton, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 12)
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -308,6 +327,20 @@ class MainActivity : Activity() {
         root.addView(progressBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
         messageView = ui.text("", 14f)
         root.addView(messageView)
+        ui.space(root, 16)
+
+        // Queue card
+        queueRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        queueEmptyText = ui.text(s.queueEmpty, 13f, alpha = 0.6f)
+        printQueueButton = ui.softButton(s.printQueue.format(0)) { printQueue() }
+        val queueCard = ui.card(
+            ui.text(s.queueTitle, 16f, bold = true),
+            queueEmptyText,
+            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(queueRow) },
+            ui.row(ui.softButton(s.addSeveral) { pickSeveral() }, ui.softButton(s.clearQueue) { clearQueue() }, gap = 6),
+            printQueueButton,
+        )
+        root.addView(queueCard)
         ui.space(root, 24)
 
         debugCard = buildDebugCard()
@@ -359,12 +392,16 @@ class MainActivity : Activity() {
         val menu = PopupMenu(this, anchor)
         menu.menu.add(0, MENU_GUIDE, 0, s.menuGuide)
         menu.menu.add(0, MENU_PIN, 1, s.menuPin)
-        menu.menu.add(0, MENU_UPDATE, 2, s.menuUpdate)
-        menu.menu.add(0, MENU_DEBUG, 3, s.menuDebug).apply { isCheckable = true; isChecked = debug }
+        menu.menu.add(0, MENU_HISTORY, 2, s.menuHistory)
+        menu.menu.add(0, MENU_EXPORT, 3, s.menuExport)
+        menu.menu.add(0, MENU_UPDATE, 4, s.menuUpdate)
+        menu.menu.add(0, MENU_DEBUG, 5, s.menuDebug).apply { isCheckable = true; isChecked = debug }
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_GUIDE -> show(guideView)
                 MENU_PIN -> askPin()
+                MENU_HISTORY -> { refreshHistory(); show(historyView) }
+                MENU_EXPORT -> exportCurrent()
                 MENU_UPDATE -> updater.check(interactive = true) { message(it) }
                 MENU_DEBUG -> {
                     debug = !debug
@@ -447,6 +484,8 @@ class MainActivity : Activity() {
         editButton.isEnabled = !busy && photo != null
         printButton.isEnabled = !busy && photo != null && connected != null
         printButton.alpha = if (printButton.isEnabled) 1f else 0.45f
+        queueButton.isEnabled = photo != null
+        printQueueButton.isEnabled = !busy && connected != null && Jobs.list(Jobs.queueDir(this)).isNotEmpty()
     }
 
     private fun message(text: String) {
@@ -474,15 +513,6 @@ class MainActivity : Activity() {
         host = host(), pin = pin(), timeoutMillis = 2_000, connectAttempts = 1,
         socketFactory = network.socketFactory(), logger = if (debug) { m -> journal("probe: $m") } else null,
     )
-
-    /** The patient client used for printing. */
-    private fun printPrinter(): InstaxPrinter {
-        journal("printer ${host()} pin ${pin()}, bound to ${network.describeBinding()}")
-        return InstaxPrinter(
-            host = host(), pin = pin(), reachTimeoutMillis = REACH_TIMEOUT_MS,
-            socketFactory = network.socketFactory(), logger = { journal(it) },
-        )
-    }
 
     /** Debug only: ask Android for the INSTAX network (DHCP), the way the first versions did. */
     private fun requestNetwork() {
@@ -535,6 +565,160 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_PICK && resultCode == RESULT_OK) data?.data?.let { loadPhoto(it) }
+        if (requestCode == REQUEST_PICK_MANY && resultCode == RESULT_OK && data != null) {
+            val uris = ArrayList<Uri>()
+            val clip = data.clipData
+            if (clip != null) for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri
+            else data.data?.let { uris += it }
+            if (uris.isNotEmpty()) queueMany(uris)
+        }
+    }
+
+    // ---------------------------------------------------------------- Queue
+
+    private fun pickSeveral() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 10)
+        } else {
+            Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        startActivityForResult(intent, REQUEST_PICK_MANY)
+    }
+
+    /** Render several photos with the current look (default framing) and queue them. */
+    private fun queueMany(uris: List<Uri>) {
+        val look = EditState().apply { copyLookFrom(editState) }
+        setBusy(true)
+        Thread {
+            var added = 0
+            for (uri in uris) {
+                try {
+                    val bitmap = Photos.load(contentResolver, uri)
+                    val state = EditState().apply { copyLookFrom(look); photoDate = Photos.exifDate(contentResolver, uri) }
+                    val rendered = PrintRenderer.render(bitmap, state, PREVIEW_SIZE)
+                    Jobs.save(Jobs.queueDir(this), rendered)
+                    rendered.recycle()
+                    bitmap.recycle()
+                    added++
+                } catch (e: Exception) {
+                    journal("queue: could not render $uri: $e")
+                }
+            }
+            val count = added
+            mainHandler.post {
+                setBusy(false)
+                refreshQueue()
+                message(s.queued.format(Jobs.list(Jobs.queueDir(this)).size))
+                journal("queued $count photo(s)")
+            }
+        }.start()
+    }
+
+    private fun addCurrentToQueue() {
+        val bitmap = photo ?: return message(s.noPhoto)
+        Jobs.save(Jobs.queueDir(this), PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
+        refreshQueue()
+        message(s.queued.format(Jobs.list(Jobs.queueDir(this)).size))
+    }
+
+    private fun refreshQueue() {
+        val files = Jobs.list(Jobs.queueDir(this))
+        queueRow.removeAllViews()
+        queueEmptyText.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
+        for (file in files) {
+            val thumb = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = ui.rounded(Ui.CARD, 12)
+                clipToOutline = true
+                setImageBitmap(Jobs.thumbnail(file, 160))
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setMessage(s.removeFromQueue)
+                        .setNegativeButton(s.cancel, null)
+                        .setPositiveButton(s.remove) { _, _ -> file.delete(); refreshQueue() }
+                        .show()
+                }
+            }
+            queueRow.addView(thumb, LinearLayout.LayoutParams(ui.dp(72), ui.dp(72)).apply { marginEnd = ui.dp(8) })
+        }
+        printQueueButton.text = s.printQueue.format(files.size)
+        updateButtons()
+    }
+
+    private fun clearQueue() {
+        for (f in Jobs.list(Jobs.queueDir(this))) f.delete()
+        refreshQueue()
+    }
+
+    private fun printQueue() {
+        if (connected == null) return message(s.notConnectedYet)
+        val files = Jobs.list(Jobs.queueDir(this))
+        if (files.isEmpty()) return
+        startPrinting(files)
+    }
+
+    // ---------------------------------------------------------------- History and export
+
+    private fun buildHistory(): View {
+        val root = ui.column(20)
+        root.addView(ui.title(s.historyTitle))
+        ui.space(root, 12)
+        historyList = ui.column()
+        root.addView(historyList, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 16)
+        root.addView(ui.softButton(s.back) { show(homeView) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        return ScrollView(this).apply { addView(root) }
+    }
+
+    private fun refreshHistory() {
+        historyList.removeAllViews()
+        val files = Jobs.list(Jobs.historyDir(this)).reversed()
+        if (files.isEmpty()) {
+            historyList.addView(ui.text(s.historyEmpty, 14f, alpha = 0.6f))
+            return
+        }
+        val format = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+        for (file in files) {
+            val thumb = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = ui.rounded(Ui.CARD, 12)
+                clipToOutline = true
+                setImageBitmap(Jobs.thumbnail(file, 240))
+            }
+            val info = ui.column().apply {
+                addView(ui.text(format.format(Date(Jobs.time(file))), 13f, bold = true))
+                addView(ui.row(
+                    ui.softButton(s.reprint) { if (connected == null) message(s.notConnectedYet) else startPrinting(listOf(file), archive = false) },
+                    ui.softButton(s.share) { Jobs.load(file)?.let { exportAndShare(it) } },
+                    gap = 6,
+                ), LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
+                addView(ui.softButton(s.remove) {
+                    AlertDialog.Builder(this@MainActivity).setMessage(s.deleteEntry).setNegativeButton(s.cancel, null)
+                        .setPositiveButton(s.remove) { _, _ -> file.delete(); refreshHistory() }.show()
+                }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(thumb, LinearLayout.LayoutParams(ui.dp(96), ui.dp(96)).apply { marginEnd = ui.dp(12) })
+                addView(info, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            }
+            historyList.addView(ui.card(row, padding = 12), LinearLayout.LayoutParams(ui.match, ui.wrap).apply { bottomMargin = ui.dp(10) })
+        }
+    }
+
+    private fun exportCurrent() {
+        val bitmap = photo ?: return message(s.noPhoto)
+        exportAndShare(PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
+    }
+
+    private fun exportAndShare(rendered: Bitmap) {
+        val uri = Jobs.exportToGallery(this, rendered)
+        if (uri == null) return message(s.exportFailed)
+        message(s.exported)
+        startActivity(Intent.createChooser(
+            Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            s.share,
+        ))
     }
 
     private fun handleShareIntent(intent: Intent?) {
@@ -1150,46 +1334,60 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Printing
 
     private fun print() {
-        val bitmap = photo
-        if (bitmap == null) return message(s.noPhoto)
+        val bitmap = photo ?: return message(s.noPhoto)
         if (connected == null) return message(s.notConnectedYet)
-        if (!printing.compareAndSet(false, true)) return message(s.busy)
-        setBusy(true)
-        val printer = printPrinter()
-        val source = PrintRenderer.source(bitmap, editState)
-        val transferOnly = debug && transferOnlySwitch.isChecked
-        journal(if (transferOnly) "starting a transfer-only test" else "starting a print")
-        Thread {
-            val result = runCatching {
-                printer.print(source, transferOnly) { event -> mainHandler.post { onPrintEvent(event) } }
-            }
-            mainHandler.post {
-                printing.set(false)
-                setBusy(false)
-                result.onFailure { showError(it) }
-                watcher.refresh()
-            }
-        }.start()
+        if (printing.get()) return message(s.busy)
+        val file = Jobs.save(Jobs.queueDir(this), PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
+        startPrinting(listOf(file))
     }
 
-    private fun onPrintEvent(event: PrintEvent) {
-        when (event) {
-            is PrintEvent.Reaching -> messageView.text = s.reaching.format(event.reason, event.attempt)
-            PrintEvent.Locking -> message(s.locking)
-            is PrintEvent.Ready -> {}
-            is PrintEvent.Transferring -> {
-                progressBar.isIndeterminate = false
-                progressBar.progress = (1000L * event.sentBytes / event.totalBytes).toInt()
-                messageView.text = "${s.sending} ${100L * event.sentBytes / event.totalBytes} %"
-            }
-            PrintEvent.WaitingForPrinter -> {
-                progressBar.isIndeterminate = true
-                message(s.waiting)
-            }
-            is PrintEvent.Printing -> message(s.printing.format(event.estimatedSeconds.toInt()))
-            is PrintEvent.Finished -> message(s.done.format(event.filmRemaining))
-            PrintEvent.TransferOnlyFinished -> message(s.transferOnlyDone)
-            PrintEvent.Unlocked -> journal("unlocked")
+    /** Hand a list of rendered files to the foreground service. */
+    private fun startPrinting(files: List<File>, archive: Boolean = true) {
+        if (!printing.compareAndSet(false, true)) return message(s.busy)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
+        setBusy(true)
+        val transferOnly = debug && transferOnlySwitch.isChecked
+        journal("starting ${files.size} job(s)" + if (transferOnly) " (transfer only)" else "")
+        PrintService.listener = serviceListener
+        PrintService.start(this, files, host(), pin(), transferOnly, archive)
+    }
+
+    private val serviceListener = object : PrintService.Listener {
+        override fun onStatus(status: PrintService.Status) = applyServiceStatus(status)
+
+        override fun onJobDone(file: File, archived: File?) {
+            refreshQueue()
+        }
+
+        override fun onJobFailed(file: File, error: Throwable) {
+            journal("job failed: $error")
+        }
+
+        override fun onAllDone(printed: Int, failed: Int) {
+            printing.set(false)
+            setBusy(false)
+            refreshQueue()
+            watcher.refresh()
+        }
+
+        override fun log(line: String) = journal(line)
+    }
+
+    private fun applyServiceStatus(status: PrintService.Status) {
+        if (status.running != printing.get()) {
+            printing.set(status.running)
+            setBusy(status.running)
+        }
+        if (status.message.isNotEmpty()) {
+            messageView.text = if (status.total > 1) "${status.index}/${status.total} · ${status.message}" else status.message
+        }
+        if (status.running) {
+            progressBar.isIndeterminate = status.progress < 0
+            if (status.progress >= 0) progressBar.progress = status.progress
         }
     }
 

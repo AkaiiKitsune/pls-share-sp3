@@ -42,7 +42,9 @@ Ou compiler soi-même : ouvrir le dossier dans Android Studio, ou `./gradlew :ap
 2. La première fois, suivre le **guide de connexion** (bouton sur l'écran d'accueil ou menu ⋮) : il explique comment enregistrer le Wi-Fi `INSTAX-XXXXXXXX` avec une adresse IP fixe dans les réglages Android. Ça ne se fait qu'une fois.
 3. Rejoindre le Wi-Fi de l'imprimante. L'appli détecte toute seule qu'elle est joignable et affiche **Connectée** avec le modèle, le nombre de films et la batterie. Après l'allumage, l'imprimante met 1 à 2 minutes à répondre : l'appli attend.
 4. **Choisir une photo** (ou, depuis la galerie, *Partager → pls share SP-3*), puis **Modifier** pour cadrer : zoom au pincement, déplacement au doigt, rotation, photo entière ou remplissage, luminosité, contraste, saturation, noir et blanc. L'aperçu montre exactement ce qui sortira.
-5. **Imprimer**. Barre de progression pendant l'envoi (1,9 Mo, environ 25 s), puis attente de la fin du tirage (~15 s).
+5. **Imprimer**. L'impression tourne dans un service en arrière-plan avec une notification de progression : on peut quitter l'appli pendant l'envoi (1,9 Mo, environ 25 s) et le tirage (~15 s).
+
+**File d'impression** : « Ajouter à la file » met la photo en cours en attente, « Ajouter plusieurs… » choisit jusqu'à dix photos et leur applique le réglage courant, puis « Imprimer la file » enchaîne les tirages (arrêt automatique quand il n'y a plus de film). **Historique** (menu ⋮) : chaque tirage est conservé avec sa date, pour le réimprimer, le partager ou le supprimer. **Exporter / partager** (menu ⋮) enregistre l'image rendue (800 × 800) dans Photos › pls share SP-3 et ouvre le partage.
 
 Le PIN de l'imprimante (1111 par défaut) se change dans le menu ⋮. Le bord épais du tirage est le **bas** de l'image.
 
