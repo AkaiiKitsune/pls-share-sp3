@@ -825,7 +825,10 @@ class MainActivity : Activity() {
             addView(photoArea, FrameLayout.LayoutParams(photoSide, photoSide, Gravity.CENTER_HORIZONTAL))
         }
         screen.addView(photoWrapper, LinearLayout.LayoutParams(ui.match, photoSide))
+        // A hairline under the fixed photo marks where the scrolling part begins.
+        screen.addView(View(this).apply { setBackgroundColor(Ui.CARD_STRONG) }, LinearLayout.LayoutParams(ui.match, ui.dp(1)).apply { topMargin = ui.dp(10) })
 
+        ui.space(root, 4)
         root.addView(ui.text(s.editorHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
         ui.space(root, 10)
 

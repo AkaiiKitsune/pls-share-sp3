@@ -104,8 +104,8 @@ class PhotoEditorView(context: Context) : View(context) {
 
     private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 2f
-        color = 0x40808080
+        strokeWidth = 3f
+        color = 0x70A0A0A0
     }
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
