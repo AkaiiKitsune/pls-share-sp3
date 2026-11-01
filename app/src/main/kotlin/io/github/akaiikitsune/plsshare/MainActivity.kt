@@ -610,7 +610,16 @@ class MainActivity : Activity() {
         histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
         clippingButton = ui.softButton(s.clipping) { toggleClipping() }
         clippingHint = ui.text(s.clippingHint, 12f, alpha = 0.6f).apply { visibility = View.GONE; gravity = Gravity.CENTER }
-        root.addView(ui.row(histogramButton, clippingButton))
+        val compareButton = ui.softButton(s.compare) {}.apply {
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> { editorView.showOriginal = true; v.isPressed = true }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { editorView.showOriginal = false; v.isPressed = false }
+                }
+                true
+            }
+        }
+        root.addView(ui.row(compareButton, histogramButton, clippingButton, gap = 6))
         root.addView(clippingHint)
         ui.space(root, 16)
 

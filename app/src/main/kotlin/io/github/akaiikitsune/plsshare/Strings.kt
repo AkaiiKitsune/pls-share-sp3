@@ -74,6 +74,7 @@ class Strings private constructor(private val fr: Boolean) {
     val saturation get() = t("Saturation", "Saturation")
     val sharpness get() = t("Netteté", "Sharpness")
     val vignette get() = t("Vignettage", "Vignette")
+    val compare get() = t("Original (maintenir)", "Original (hold)")
     val histogram get() = t("Histogramme", "Histogram")
     val clipping get() = t("Zones écrêtées", "Clipping")
     val clippingHint get() = t("Rouge : hautes lumières brûlées · Bleu : ombres bouchées", "Red: blown highlights · Blue: crushed shadows")

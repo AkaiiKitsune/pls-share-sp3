@@ -25,6 +25,11 @@ class PhotoEditorView(context: Context) : View(context) {
     var showClipping = false
         set(value) { field = value; frameDirty = true; invalidate() }
 
+    /** Show the photo without any look (same framing), while a "compare" button is held. */
+    var showOriginal = false
+        set(value) { if (field != value) { field = value; invalidate() } }
+    private val neutral = EditState()
+
     /** Whether the histogram wants the pixels of the square. */
     var wantHistogram = false
         set(value) { field = value; histogramDirty = true; invalidate() }
@@ -321,6 +326,15 @@ class PhotoEditorView(context: Context) : View(context) {
         val l = left()
         val t = top()
         val busy = touching || interactive
+        if (showOriginal) {
+            neutral.reset()
+            neutral.scale = state.scale; neutral.offsetX = state.offsetX; neutral.offsetY = state.offsetY; neutral.rotation = state.rotation
+            PrintRenderer.draw(canvas, b, neutral, l, t, size)
+            textPaint.color = Color.WHITE
+            canvas.drawText("Original", l + 16f, t + 44f, textPaint)
+            canvas.drawRect(l, t, l + size, t + size, framePaint)
+            return
+        }
         if (state.needsPixelPass || showClipping) {
             val renderSize = if (busy) minOf(size.toInt(), PREVIEW_SIZE) else size.toInt()
             val f = frame
