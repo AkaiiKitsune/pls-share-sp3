@@ -55,6 +55,9 @@ class MainActivity : Activity() {
         private const val PREF_HOST = "host"
         private const val PREF_FIT = "fit"
         private const val JOURNAL_LINES = 400
+
+        /** The SP-3 needs 60 to 90 s after a Wi-Fi association before it accepts connections. */
+        private const val REACH_TIMEOUT_MS = 120_000L
     }
 
     private val s = Strings.forDefaultLocale()
@@ -311,7 +314,10 @@ class MainActivity : Activity() {
         val host = hostField.text.toString().trim().ifEmpty { InstaxPrinter.DEFAULT_HOST }
         prefs.edit().putString(PREF_PIN, pin.toString()).putString(PREF_HOST, host).apply()
         journal("printer $host pin $pin, network ${network.network ?: "default (not bound)"}")
-        return InstaxPrinter(host = host, pin = pin, socketFactory = network.socketFactory(), logger = { journal(it) })
+        return InstaxPrinter(
+            host = host, pin = pin, reachTimeoutMillis = REACH_TIMEOUT_MS,
+            socketFactory = network.socketFactory(), logger = { journal(it) },
+        )
     }
 
     private fun showInfo() {
@@ -320,7 +326,18 @@ class MainActivity : Activity() {
         setBusy(true)
         log(s.locking)
         Thread {
-            val result = runCatching { printer.info() }
+            val result = runCatching {
+                printer.waitUntilReachable { attempt, e ->
+                    val reason = e.message?.let { m ->
+                        when {
+                            "ECONNREFUSED" in m -> "refused"
+                            "timed out" in m || e is java.net.SocketTimeoutException -> "no answer"
+                            else -> e.javaClass.simpleName
+                        }
+                    } ?: e.javaClass.simpleName
+                    mainHandler.post { logView.text = s.reaching.format(reason, attempt) }
+                }
+            }
             mainHandler.post {
                 printing.set(false)
                 setBusy(false)
@@ -431,6 +448,7 @@ class MainActivity : Activity() {
 
     private fun onPrintEvent(event: PrintEvent) {
         when (event) {
+            is PrintEvent.Reaching -> logView.text = s.reaching.format(event.reason, event.attempt)
             PrintEvent.Locking -> log(s.locking)
             is PrintEvent.Ready -> showInfo(event.info)
             is PrintEvent.Transferring -> {

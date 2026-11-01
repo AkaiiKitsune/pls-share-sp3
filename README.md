@@ -7,7 +7,7 @@ Deux morceaux :
 - **`app/`** : une appli Android qui se connecte toute seule au Wi-Fi de l'imprimante, le garde pour elle, et imprime une photo de la galerie (ou reçue via « Partager »).
 - **`core/`** : le protocole de l'imprimante en Kotlin pur, un client, un **simulateur d'imprimante** et une ligne de commande `instax-print` pour imprimer depuis un ordinateur (Linux, macOS, Windows).
 
-> **État du projet** : le protocole est celui documenté et vérifié par [mbutrovich/instax_api](https://github.com/mbutrovich/instax_api) (fork de [jpwsutton/instax_api](https://github.com/jpwsutton/instax_api)). **Première impression réelle confirmée** avec l'appli Android sur une SP-3 (firmware 01.02) depuis un Pixel 7 Pro. Observé au passage : juste après un tirage, l'imprimante peut ignorer puis refuser les connexions pendant environ une minute avant de répondre à nouveau. L'appli retente et affiche un message clair ; patientez une minute avant de réessayer.
+> **État du projet** : le protocole est celui documenté et vérifié par [mbutrovich/instax_api](https://github.com/mbutrovich/instax_api) (fork de [jpwsutton/instax_api](https://github.com/jpwsutton/instax_api)). **Première impression réelle confirmée** avec l'appli Android sur une SP-3 (firmware 01.02) depuis un Pixel 7 Pro. Observé sur cette SP-3 : après chaque association Wi-Fi (et après un tirage), l'imprimante met **60 à 90 secondes** avant d'accepter une connexion TCP (connexions ignorées puis refusées, puis ça passe). L'appli et la CLI réessaient automatiquement pendant 2 minutes en affichant le nombre de tentatives.
 
 ## Pourquoi l'appli officielle « ne se connecte pas »
 

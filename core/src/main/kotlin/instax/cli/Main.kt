@@ -28,6 +28,8 @@ options:
   --info             show the printer's model, firmware, battery and film
   --off              turn the printer off
   --transfer-only    send the image to the printer but do not print it (uses no film)
+  --wait SECONDS     keep retrying for this long while the printer does not answer yet
+                     (it needs 60-90 s after a Wi-Fi association; default 90)
   --simulate         run a fake printer on --host/--port instead (default 0.0.0.0:8080)
   --save-dir DIR     with --simulate, save each received image as a PNG there
   -v                 log every frame
@@ -43,6 +45,7 @@ fun main(args: Array<String>) {
     var info = false
     var off = false
     var transferOnly = false
+    var waitSeconds = 90L
     var simulate = false
     var saveDir: File? = null
     var verbose = false
@@ -61,6 +64,7 @@ fun main(args: Array<String>) {
             "--info" -> info = true
             "--off" -> off = true
             "--transfer-only" -> transferOnly = true
+            "--wait" -> waitSeconds = next(a).toLongOrNull() ?: fail("bad --wait")
             "--simulate" -> simulate = true
             "--save-dir" -> saveDir = File(next(a))
             "-v", "--verbose" -> verbose = true
@@ -77,10 +81,11 @@ fun main(args: Array<String>) {
     }
 
     try {
-        val printer = InstaxPrinter(host, port, pin, logger = log)
+        val printer = InstaxPrinter(host, port, pin, reachTimeoutMillis = waitSeconds * 1000, logger = log)
         when {
             info -> {
-                val i = printer.info()
+                val i = printer.waitUntilReachable { attempt, _ -> print("\rWaiting for the printer (attempt $attempt)") }
+                if (verbose.not()) println()
                 println("Model:      ${i.model}")
                 println("Firmware:   ${i.firmware} (hardware ${i.hardware})")
                 println("Battery:    ${i.batteryLevel}/3${if (i.charging) ", charging" else ""}")
@@ -99,7 +104,8 @@ fun main(args: Array<String>) {
                 }
                 printer.print(DesktopImages.source(image, fit), transferOnly = transferOnly) { event ->
                     when (event) {
-                        PrintEvent.Locking -> println("Connecting to $host:$port...")
+                        is PrintEvent.Reaching -> print("\rWaiting for the printer (attempt ${event.attempt}, ${event.reason})")
+                        PrintEvent.Locking -> println("\nConnecting to $host:$port...")
                         is PrintEvent.Ready -> println("${event.info.model}, ${event.info.filmRemaining} sheets left, battery ${event.info.batteryLevel}/3")
                         is PrintEvent.Transferring -> if (event.sentBytes == event.totalBytes) println("Image sent") else print("\rSending ${100 * event.sentBytes / event.totalBytes}%")
                         PrintEvent.WaitingForPrinter -> {}

@@ -28,6 +28,7 @@ class Strings private constructor(private val fr: Boolean) {
     val noPhoto get() = t("Choisissez d'abord une photo.", "Pick a photo first.")
     val badPin get() = t("Le PIN doit avoir 4 chiffres.", "The PIN must be 4 digits.")
     val busy get() = t("Impression en cours, patientez.", "A print is running, please wait.")
+    val reaching get() = t("L'imprimante ne répond pas encore (%s), nouvel essai %d… Elle met 1 à 2 min après la connexion Wi-Fi.", "The printer is not answering yet (%s), attempt %d… It needs 1 to 2 min after joining the Wi-Fi.")
     val locking get() = t("Connexion à l'imprimante…", "Contacting the printer…")
     val sending get() = t("Envoi de la photo", "Sending the photo")
     val waiting get() = t("L'imprimante prépare le tirage…", "The printer is getting ready…")

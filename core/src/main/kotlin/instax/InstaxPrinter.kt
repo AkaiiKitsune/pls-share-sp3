@@ -25,6 +25,8 @@ data class PrinterInfo(
 
 /** Progress of a print job, reported on the thread that runs it. */
 sealed class PrintEvent {
+    /** The printer did not answer yet; the client keeps trying until [InstaxPrinter.reachTimeoutMillis]. */
+    data class Reaching(val attempt: Int, val reason: String) : PrintEvent()
     object Locking : PrintEvent()
     data class Ready(val info: PrinterInfo) : PrintEvent()
     data class Transferring(val sentBytes: Int, val totalBytes: Int) : PrintEvent()
@@ -58,6 +60,12 @@ class InstaxPrinter(
     val port: Int = DEFAULT_PORT,
     val pin: Int = DEFAULT_PIN,
     val timeoutMillis: Int = 15_000,
+    /**
+     * How long [waitUntilReachable] and [print] keep retrying while the printer does not answer.
+     * The SP-3 takes 60 to 90 seconds after a Wi-Fi association before it accepts connections.
+     * Zero means a single attempt (plus the short [CONNECT_ATTEMPTS] retries).
+     */
+    val reachTimeoutMillis: Long = 0,
     private val socketFactory: SocketFactory = SocketFactory.getDefault(),
     private val sessionId: Int = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
     private val sleeper: (Long) -> Unit = Thread::sleep,
@@ -87,6 +95,9 @@ class InstaxPrinter(
         /** The printer sometimes refuses or ignores a connection right after another one; try again. */
         const val CONNECT_ATTEMPTS = 3
         const val CONNECT_RETRY_DELAY = 1_500L
+
+        /** Pause between attempts in [waitUntilReachable]. */
+        const val REACH_RETRY_DELAY = 2_000L
 
         const val RAW_RGB_FORMAT = 16
 
@@ -163,6 +174,26 @@ class InstaxPrinter(
         )
     }
 
+    /**
+     * Keep asking the printer for its info until it answers or [reachTimeoutMillis] has passed.
+     * [onAttempt] is told about every failed attempt. Throws the last error on timeout.
+     */
+    fun waitUntilReachable(onAttempt: ((Int, IOException) -> Unit)? = null): PrinterInfo {
+        val deadline = System.nanoTime() + reachTimeoutMillis * 1_000_000
+        var attempt = 0
+        while (true) {
+            attempt++
+            try {
+                return info()
+            } catch (e: IOException) {
+                if (System.nanoTime() >= deadline) throw e
+                logger?.invoke("printer not reachable yet (attempt $attempt: ${shortReason(e)}), waiting")
+                onAttempt?.invoke(attempt, e)
+                sleeper(REACH_RETRY_DELAY)
+            }
+        }
+    }
+
     /** Whether a printer answers at all on this network. Does not need the right PIN. */
     fun ping(): Boolean = try {
         connect().use { c -> c.send(Opcode.VERSION, allow = setOf(ReturnCode.WRONG_PIN, ReturnCode.OTHER_CLIENT)) }
@@ -186,6 +217,9 @@ class InstaxPrinter(
      * exercises the whole transfer without using a sheet of film.
      */
     fun print(source: ImageSource, transferOnly: Boolean = false, listener: PrintListener = PrintListener {}) {
+        if (reachTimeoutMillis > 0) {
+            waitUntilReachable { attempt, e -> listener.onEvent(PrintEvent.Reaching(attempt, shortReason(e))) }
+        }
         listener.onEvent(PrintEvent.Locking)
         setLock(true)
         try {
@@ -281,6 +315,17 @@ class InstaxPrinter(
             val response = connect().use { c -> c.send(Opcode.PRINT_STATUS, allow = STILL_PRINTING + PRINT_FINISHED) }
             if (response.returnCode in PRINT_FINISHED) return response
             if (System.nanoTime() >= deadline) throw PrintTimeoutException("the printer did not report that the print finished")
+        }
+    }
+
+    private fun shortReason(e: IOException): String {
+        val message = e.message ?: return e.javaClass.simpleName
+        return when {
+            "ECONNREFUSED" in message -> "connection refused"
+            "EHOSTUNREACH" in message -> "no route to host"
+            "ECONNABORTED" in message -> "connection aborted"
+            e is java.net.SocketTimeoutException || "timed out" in message -> "no answer"
+            else -> message.substringAfterLast(": ")
         }
     }
 

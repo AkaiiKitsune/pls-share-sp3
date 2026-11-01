@@ -150,3 +150,43 @@ class TransferOnlyTest {
         }
     }
 }
+
+class ReachabilityTest {
+    @Test
+    fun `waits for a printer that starts late`() {
+        val probe = Simulator(port = 0)
+        val port = probe.port
+        probe.close()
+        var sleeps = 0
+        var late: Simulator? = null
+        val printer = InstaxPrinter(
+            "127.0.0.1", port, timeoutMillis = 500, reachTimeoutMillis = 60_000, sessionId = 5,
+            sleeper = { if (++sleeps == 6) late = Simulator(port = port).start() },
+        )
+        try {
+            val attempts = mutableListOf<Int>()
+            val info = printer.waitUntilReachable { attempt, _ -> attempts += attempt }
+            assertEquals("SP-3", info.model)
+            assertTrue(attempts.isNotEmpty())
+            assertEquals((1..attempts.size).toList(), attempts)
+
+            val events = mutableListOf<PrintEvent>()
+            printer.print({ w, h -> IntArray(w * h) }, listener = { events += it })
+            assertFalse(events.any { it is PrintEvent.Reaching })
+            assertTrue(events.any { it is PrintEvent.Finished })
+        } finally {
+            late?.close()
+        }
+    }
+
+    @Test
+    fun `gives up after the reach timeout`() {
+        val probe = Simulator(port = 0)
+        val port = probe.port
+        probe.close()
+        var waited = 0L
+        val printer = InstaxPrinter("127.0.0.1", port, timeoutMillis = 300, reachTimeoutMillis = 0, sessionId = 6, sleeper = { waited += it })
+        assertThrows(java.io.IOException::class.java) { printer.waitUntilReachable() }
+        assertEquals(2 * InstaxPrinter.CONNECT_RETRY_DELAY, waited)
+    }
+}
