@@ -83,6 +83,14 @@ jobs:
         run: |
           git tag -f nightly
           git push -f origin nightly
+      - name: Remove older APKs from the nightly pre-release
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for asset in $(gh release view nightly --json assets --jq '.assets[].name' 2>/dev/null); do
+            gh release delete-asset nightly "$asset" --yes
+          done
       - name: Publish the nightly pre-release
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
