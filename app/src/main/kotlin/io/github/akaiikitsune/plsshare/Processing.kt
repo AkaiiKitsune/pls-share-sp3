@@ -90,6 +90,33 @@ object Processing {
         return arrayOf(r, g, b, l)
     }
 
+    /**
+     * Auto levels: stretch the luminance so that the darkest 0.5 % of pixels become black and the
+     * brightest 0.5 % white, expressed as the brightness and contrast sliders (-100..100).
+     * Returns null when the photo already uses the full range.
+     */
+    fun autoLevels(pixels: IntArray): Pair<Float, Float>? {
+        val luma = histogram(pixels, stride = 1)[3]
+        val total = luma.sum()
+        if (total == 0) return null
+        val cut = total / 200
+        var acc = 0
+        var low = 0
+        while (low < 255 && acc + luma[low] < cut) { acc += luma[low]; low++ }
+        acc = 0
+        var high = 255
+        while (high > 0 && acc + luma[high] < cut) { acc += luma[high]; high-- }
+        if (high - low < 16) return null
+        val lo = low / 255f
+        val hi = high / 255f
+        val c = (1f / (hi - lo)).coerceIn(1f, 2f)
+        // v' = 0.5 + (v + b - 0.5)·c must equal (v - lo)·c, so b = 0.5 - 0.5/c - lo.
+        val b = 0.5f - 0.5f / c - lo
+        val brightness = (b * 200f).coerceIn(-100f, 100f)
+        val contrast = ((c - 1f) * 100f).coerceIn(-100f, 100f)
+        return brightness to contrast
+    }
+
     const val CLIP_HIGH = 0xFFFF2020.toInt()
     const val CLIP_LOW = 0xFF2070FF.toInt()
 

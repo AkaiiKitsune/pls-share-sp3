@@ -124,6 +124,18 @@ class EditState {
     /** A [Filters] preset id, applied before the adjustments above. */
     var filter = "normal"
 
+    /** Border around the photo as a fraction of the print size (0 = none). */
+    var frameWidth = 0f
+
+    /** Extra band under the photo, Polaroid style, as a fraction of the print size. */
+    var frameBand = 0f
+
+    /** Corner radius of the photo area as a fraction of the print size. */
+    var cornerRadius = 0f
+
+    /** Colour of the border and band. */
+    var frameColor = Color.WHITE
+
     /** Texts stamped on the print, drawn last. */
     val overlays = mutableListOf<Overlay>()
 
@@ -135,6 +147,7 @@ class EditState {
         brightness = 0f; contrast = 0f; saturation = 1f; filter = "normal"
         shadows = 0f; highlights = 0f; blacks = 0f; whites = 0f
         temperature = 0f; tint = 0f; sharpness = 0f; vignette = 0f
+        frameWidth = 0f; frameBand = 0f; cornerRadius = 0f; frameColor = Color.WHITE
         overlays.clear()
     }
 
@@ -146,7 +159,19 @@ class EditState {
         brightness = other.brightness; contrast = other.contrast; saturation = other.saturation; filter = other.filter
         shadows = other.shadows; highlights = other.highlights; blacks = other.blacks; whites = other.whites
         temperature = other.temperature; tint = other.tint; sharpness = other.sharpness; vignette = other.vignette
+        frameWidth = other.frameWidth; frameBand = other.frameBand; cornerRadius = other.cornerRadius; frameColor = other.frameColor
     }
+
+    /** Copy only the look (filter, colours, tones, details, frame), not the framing or the texts. */
+    fun copyLookFrom(other: EditState) {
+        brightness = other.brightness; contrast = other.contrast; saturation = other.saturation; filter = other.filter
+        shadows = other.shadows; highlights = other.highlights; blacks = other.blacks; whites = other.whites
+        temperature = other.temperature; tint = other.tint; sharpness = other.sharpness; vignette = other.vignette
+        frameWidth = other.frameWidth; frameBand = other.frameBand; cornerRadius = other.cornerRadius; frameColor = other.frameColor
+    }
+
+    /** The photo area inside the frame and band, as fractions of the print: left, top, right, bottom. */
+    fun innerRect(): FloatArray = floatArrayOf(frameWidth, frameWidth, 1f - frameWidth, 1f - frameWidth - frameBand)
 
     /** Whether any per-pixel step (tone curve, sharpening) is needed beyond the colour matrix. */
     val needsPixelPass: Boolean
@@ -173,30 +198,36 @@ object PrintRenderer {
     }
 
     /**
-     * The scale (print size = 1) at which the rotated photo exactly covers the square, so that
-     * [EditState.scale] = 1 means "fill" whatever the angle. A rectangle covers a square of side S
-     * once each of its sides is at least S · (|cos θ| + |sin θ|).
+     * The scale (print size = 1) at which the rotated photo exactly covers the photo area (the
+     * square minus frame and band), so that [EditState.scale] = 1 means "fill" whatever the angle.
+     * A w×h photo rotated by θ covers a W×H area once w·s ≥ W|cos θ| + H|sin θ| and h·s ≥ W|sin θ| + H|cos θ|.
      */
     fun fillScale(bitmap: Bitmap, state: EditState): Float {
+        val inner = state.innerRect()
+        val areaW = inner[2] - inner[0]
+        val areaH = inner[3] - inner[1]
         val rad = Math.toRadians(state.rotation.toDouble())
-        val cover = (kotlin.math.abs(kotlin.math.cos(rad)) + kotlin.math.abs(kotlin.math.sin(rad))).toFloat()
-        return maxOf(1f / bitmap.width, 1f / bitmap.height) * cover
+        val c = kotlin.math.abs(kotlin.math.cos(rad)).toFloat()
+        val sn = kotlin.math.abs(kotlin.math.sin(rad)).toFloat()
+        return maxOf((areaW * c + areaH * sn) / bitmap.width, (areaW * sn + areaH * c) / bitmap.height)
     }
 
-    /** The [EditState.scale] that shows the whole photo inside the square. */
+    /** The [EditState.scale] that shows the whole photo inside the photo area. */
     fun containScale(bitmap: Bitmap, state: EditState): Float {
+        val inner = state.innerRect()
         val (w, h) = rotatedSize(bitmap, state)
-        return minOf(1f / w, 1f / h) / fillScale(bitmap, state)
+        return minOf((inner[2] - inner[0]) / w, (inner[3] - inner[1]) / h) / fillScale(bitmap, state)
     }
 
-    /** Where the box around the photo sits in the square, as fractions of the print size: left, top, right, bottom. */
+    /** Where the box around the photo sits, as fractions of the print size: left, top, right, bottom. */
     fun imageRect(bitmap: Bitmap, state: EditState): FloatArray {
+        val inner = state.innerRect()
         val (w, h) = rotatedSize(bitmap, state)
         val s = fillScale(bitmap, state) * state.scale
         val halfW = w * s / 2
         val halfH = h * s / 2
-        val cx = 0.5f + state.offsetX
-        val cy = 0.5f + state.offsetY
+        val cx = (inner[0] + inner[2]) / 2 + state.offsetX
+        val cy = (inner[1] + inner[3]) / 2 + state.offsetY
         return floatArrayOf(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
     }
 
@@ -205,10 +236,13 @@ object PrintRenderer {
         state.scale = state.scale.coerceIn(EditState.MIN_SCALE, EditState.MAX_SCALE)
         state.rotation = ((state.rotation % 360f) + 360f) % 360f
         val r = imageRect(bitmap, state)
+        val inner = state.innerRect()
         val halfW = (r[2] - r[0]) / 2
         val halfH = (r[3] - r[1]) / 2
-        state.offsetX = state.offsetX.coerceIn(-0.5f - halfW + 0.1f, 0.5f + halfW - 0.1f)
-        state.offsetY = state.offsetY.coerceIn(-0.5f - halfH + 0.1f, 0.5f + halfH - 0.1f)
+        val areaHalfW = (inner[2] - inner[0]) / 2
+        val areaHalfH = (inner[3] - inner[1]) / 2
+        state.offsetX = state.offsetX.coerceIn(-areaHalfW - halfW + 0.1f, areaHalfW + halfW - 0.1f)
+        state.offsetY = state.offsetY.coerceIn(-areaHalfH - halfH + 0.1f, areaHalfH + halfH - 0.1f)
     }
 
     /** The colour matrix part of the look: preset, saturation, temperature and tint. */
@@ -227,33 +261,58 @@ object PrintRenderer {
         return matrix
     }
 
-    /** Vignette: a radial darkening drawn over the square. */
-    private fun drawVignette(canvas: Canvas, state: EditState, left: Float, top: Float, size: Float) {
+    /** Vignette: a radial darkening drawn over the photo area. */
+    private fun drawVignette(canvas: Canvas, state: EditState, left: Float, top: Float, width: Float, height: Float) {
         if (state.vignette <= 0f) return
         val alpha = (state.vignette / 100f * 200f).toInt().coerceIn(0, 255)
         val shader = android.graphics.RadialGradient(
-            left + size / 2, top + size / 2, size * 0.78f,
+            left + width / 2, top + height / 2, maxOf(width, height) * 0.78f,
             intArrayOf(0x00000000, 0x00000000, (alpha shl 24)), floatArrayOf(0f, 0.4f, 1f),
             android.graphics.Shader.TileMode.CLAMP,
         )
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.shader = shader }
-        canvas.drawRect(left, top, left + size, top + size, p)
+        canvas.drawRect(left, top, left + width, top + height, p)
     }
+
+    /**
+     * An approximation of how instax film renders the screen image: less contrast and saturation,
+     * lifted blacks, a slightly warm cast. Display only, never applied to the printed data.
+     * Tune the constants after comparing a few real prints with the screen.
+     */
+    val filmLook: ColorMatrix = Filters.look(contrast = 0.86f, brightness = 10f, saturation = 0.82f, gainR = 1.03f, gainB = 0.96f, offsetB = -2f)
+
+    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val clipPath = android.graphics.Path()
 
     /** Draw the print into a [size] x [size] square whose top-left corner is at ([left], [top]). */
     fun draw(canvas: Canvas, bitmap: Bitmap, state: EditState, left: Float, top: Float, size: Float) {
         canvas.save()
         canvas.clipRect(left, top, left + size, top + size)
+        framePaint.color = state.frameColor
+        canvas.drawRect(left, top, left + size, top + size, framePaint)
+        val inner = state.innerRect()
+        val il = left + inner[0] * size
+        val it = top + inner[1] * size
+        val ir = left + inner[2] * size
+        val ib = top + inner[3] * size
+        val radius = state.cornerRadius * size
+        if (radius > 0f) {
+            clipPath.reset()
+            clipPath.addRoundRect(il, it, ir, ib, radius, radius, android.graphics.Path.Direction.CW)
+            canvas.clipPath(clipPath)
+        } else {
+            canvas.clipRect(il, it, ir, ib)
+        }
         canvas.drawColor(Color.WHITE)
         val fill = fillScale(bitmap, state) * state.scale * size
         val matrix = Matrix()
         matrix.postTranslate(-bitmap.width / 2f, -bitmap.height / 2f)
         matrix.postRotate(state.rotation)
         matrix.postScale(fill, fill)
-        matrix.postTranslate(left + size / 2 + state.offsetX * size, top + size / 2 + state.offsetY * size)
+        matrix.postTranslate((il + ir) / 2 + state.offsetX * size, (it + ib) / 2 + state.offsetY * size)
         paint.colorFilter = ColorMatrixColorFilter(colorMatrix(state))
         canvas.drawBitmap(bitmap, matrix, paint)
-        drawVignette(canvas, state, left, top, size)
+        drawVignette(canvas, state, il, it, ir - il, ib - it)
         canvas.restore()
     }
 

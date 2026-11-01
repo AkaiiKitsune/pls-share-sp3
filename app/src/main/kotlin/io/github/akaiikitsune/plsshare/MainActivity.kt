@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
@@ -60,6 +61,7 @@ class MainActivity : Activity() {
         private const val PREF_PIN = "pin"
         private const val PREF_HOST = "host"
         private const val PREF_DEBUG = "debug"
+        private const val PREF_FILM = "filmPreview"
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
 
@@ -97,7 +99,8 @@ class MainActivity : Activity() {
     private lateinit var statusDetail: TextView
     private lateinit var statusSpinner: ProgressBar
     private lateinit var statusAction: Button
-    private lateinit var previewImage: ImageView
+    private lateinit var previewImage: PrintPreviewView
+    private lateinit var filmSwitch: Switch
     private lateinit var previewHint: TextView
     private lateinit var pickButton: Button
     private lateinit var editButton: Button
@@ -130,6 +133,13 @@ class MainActivity : Activity() {
     private val fontButtons = LinkedHashMap<Overlay.Font, Button>()
     private lateinit var overlayMarginBar: SeekBar
     private lateinit var overlaySizeValue: TextView
+    private lateinit var presetRow2: LinearLayout
+    private lateinit var filmButton: Button
+    private val presets by lazy { Presets(prefs) }
+    private val frameColors = listOf(
+        Color.WHITE, Color.BLACK, 0xFFF5EBD8.toInt(), 0xFFF7C9D4.toInt(), 0xFFC9DDF7.toInt(), 0xFFC9A77C.toInt(), 0xFF2E3440.toInt(),
+    )
+    private val frameColorButtons = ArrayList<View>()
     private lateinit var overlayMarginValue: TextView
     private var photoDate: Long? = null
     private lateinit var presetRow: LinearLayout
@@ -262,17 +272,10 @@ class MainActivity : Activity() {
         ui.space(root, 16)
 
         // Preview
-        previewImage = object : ImageView(this) {
-            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val w = MeasureSpec.getSize(widthMeasureSpec)
-                setMeasuredDimension(w, w)
-            }
-        }.apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            background = ui.rounded(Ui.CARD, 20)
-            clipToOutline = true
+        previewImage = PrintPreviewView(this).apply {
             contentDescription = s.pickPhoto
-            setOnClickListener { if (photo == null) pickPhoto() else openEditor() }
+            filmPreview = prefs.getBoolean(PREF_FILM, false)
+            onClick = { if (photo == null) pickPhoto() else openEditor() }
         }
         previewHint = ui.text(s.tapToPick, 14f, alpha = 0.6f).apply { gravity = Gravity.CENTER }
         val previewFrame = FrameLayout(this).apply {
@@ -280,7 +283,14 @@ class MainActivity : Activity() {
             addView(previewHint, FrameLayout.LayoutParams(ui.wrap, ui.wrap, Gravity.CENTER))
         }
         root.addView(previewFrame)
-        ui.space(root, 12)
+        filmSwitch = Switch(this).apply {
+            text = s.filmPreview
+            isChecked = prefs.getBoolean(PREF_FILM, false)
+            setOnCheckedChangeListener { _, checked -> setFilmPreview(checked) }
+            setPadding(ui.dp(4), ui.dp(4), ui.dp(4), ui.dp(4))
+        }
+        root.addView(filmSwitch)
+        ui.space(root, 8)
 
         pickButton = ui.softButton(s.pickPhoto) { pickPhoto() }
         editButton = ui.softButton(s.edit) { openEditor() }
@@ -563,8 +573,16 @@ class MainActivity : Activity() {
 
     private fun refreshPreview() {
         val bitmap = photo ?: return
-        previewImage.setImageBitmap(PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
+        previewImage.bitmap = PrintRenderer.render(bitmap, editState, PREVIEW_SIZE)
         previewHint.visibility = View.GONE
+    }
+
+    private fun setFilmPreview(on: Boolean) {
+        prefs.edit().putBoolean(PREF_FILM, on).apply()
+        previewImage.filmPreview = on
+        editorView.filmPreview = on
+        if (filmSwitch.isChecked != on) filmSwitch.isChecked = on
+        filmButton.setTextColor(if (on) ui.accent else labelColor)
     }
 
     // ---------------------------------------------------------------- Editor screen
@@ -605,7 +623,7 @@ class MainActivity : Activity() {
             ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.whole) { editorView.update { scale = PrintRenderer.containScale(editorView.bitmap!!, this); offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() }.also { blackWhiteButton = it },
-            ui.softButton(s.reset) { editorView.update { reset() }; syncSliders(); syncPresets() },
+            ui.softButton(s.reset) { editorView.update { reset() }; syncSliders(); syncPresets(); syncFrameColors() },
             gap = 6,
         ))
         ui.space(adjust, 16)
@@ -653,7 +671,20 @@ class MainActivity : Activity() {
         adjust.addView(clippingHint)
         ui.space(adjust, 16)
 
-        adjust.addView(ui.text(s.light, 14f, bold = true))
+        adjust.addView(ui.text(s.myPresets, 14f, bold = true))
+        ui.space(adjust, 6)
+        presetRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        adjust.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow2) })
+        adjust.addView(ui.text(s.presetHint, 12f, alpha = 0.6f))
+        ui.space(adjust, 12)
+
+        val lightHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.text(s.light, 14f, bold = true), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            addView(ui.softButton(s.auto) { autoLevels() }, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+        }
+        adjust.addView(lightHeader)
         ui.space(adjust, 6)
         slider(adjust, s.brightness, -100, 100, { it.brightness.toInt() }) { v -> editorView.update { brightness = v.toFloat() } }
         slider(adjust, s.contrast, -100, 100, { it.contrast.toInt() }) { v -> editorView.update { contrast = v.toFloat() } }
@@ -674,6 +705,25 @@ class MainActivity : Activity() {
         ui.space(adjust, 6)
         slider(adjust, s.sharpness, 0, 100, { it.sharpness.toInt() }) { v -> editorView.update { sharpness = v.toFloat() } }
         slider(adjust, s.vignette, 0, 100, { it.vignette.toInt() }) { v -> editorView.update { vignette = v.toFloat() } }
+        ui.space(adjust, 8)
+
+        adjust.addView(ui.text(s.frame, 14f, bold = true))
+        ui.space(adjust, 6)
+        slider(adjust, s.frameWidth, 0, 15, { Math.round(it.frameWidth * 100f) }) { v -> editorView.update { frameWidth = v / 100f } }
+        slider(adjust, s.frameBand, 0, 30, { Math.round(it.frameBand * 100f) }) { v -> editorView.update { frameBand = v / 100f } }
+        slider(adjust, s.cornerRadius, 0, 20, { Math.round(it.cornerRadius * 100f) }) { v -> editorView.update { cornerRadius = v / 100f } }
+        adjust.addView(ui.text(s.frameColor, 13f, alpha = 0.7f))
+        ui.space(adjust, 4)
+        val colorRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (color in frameColors) {
+            val chip = View(this).apply {
+                background = ui.rounded(color, 18)
+                setOnClickListener { editorView.update { frameColor = color }; syncFrameColors() }
+            }
+            frameColorButtons += chip
+            colorRow.addView(chip, LinearLayout.LayoutParams(ui.dp(36), ui.dp(36)).apply { marginEnd = ui.dp(10) })
+        }
+        adjust.addView(colorRow)
 
         return ScrollView(this).apply { addView(root) }
     }
@@ -945,6 +995,69 @@ class MainActivity : Activity() {
         sliders[label] = bar to { st -> read(st) - min }
     }
 
+    private fun syncFrameColors() {
+        val current = editorView.state.frameColor
+        frameColors.forEachIndexed { i, color ->
+            val chip = frameColorButtons[i]
+            chip.alpha = if (color == current) 1f else 0.45f
+            chip.scaleX = if (color == current) 1.15f else 1f
+            chip.scaleY = chip.scaleX
+        }
+    }
+
+    private fun autoLevels() {
+        val bitmap = editorView.bitmap ?: return
+        // Measure the photo with its current framing and filter but neutral tones.
+        val probe = EditState().apply { copyFrom(editorView.state); brightness = 0f; contrast = 0f; shadows = 0f; highlights = 0f; blacks = 0f; whites = 0f; overlays.clear() }
+        val sample = PrintRenderer.render(bitmap, probe, 256, sharpen = false)
+        val pixels = IntArray(256 * 256)
+        sample.getPixels(pixels, 0, 256, 0, 0, 256, 256)
+        val levels = Processing.autoLevels(pixels)
+        if (levels == null) {
+            message(s.autoNothing)
+            return
+        }
+        editorView.update { brightness = levels.first; contrast = levels.second }
+        syncSliders()
+        message(s.autoDone)
+    }
+
+    private fun refreshPresetRow() {
+        presetRow2.removeAllViews()
+        val save = ui.softButton(s.savePreset) { askPresetName() }
+        presetRow2.addView(save, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(6) })
+        for (entry in presets.load()) {
+            val chip = ui.softButton(entry.name) {
+                editorView.update { copyLookFrom(entry.look) }
+                syncSliders(); syncPresets(); syncFrameColors()
+            }
+            chip.setOnLongClickListener {
+                AlertDialog.Builder(this)
+                    .setMessage(s.presetDelete.format(entry.name))
+                    .setNegativeButton(s.cancel, null)
+                    .setPositiveButton(s.remove) { _, _ -> presets.remove(entry.name); refreshPresetRow() }
+                    .show()
+                true
+            }
+            presetRow2.addView(chip, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(6) })
+        }
+    }
+
+    private fun askPresetName() {
+        val field = EditText(this).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES; hint = s.presetName }
+        AlertDialog.Builder(this)
+            .setTitle(s.savePreset)
+            .setView(field)
+            .setNegativeButton(s.cancel, null)
+            .setPositiveButton(s.ok) { _, _ ->
+                val name = field.text.toString().trim().ifEmpty { return@setPositiveButton }
+                presets.add(name, editorView.state)
+                refreshPresetRow()
+                message(s.presetSaved)
+            }
+            .show()
+    }
+
     private fun syncSliders() {
         for ((bar, read) in sliders.values) bar.progress = read(editorView.state)
         val mono = editorView.state.saturation == 0f
@@ -990,6 +1103,10 @@ class MainActivity : Activity() {
         buildThumbnails(bitmap)
         syncSliders()
         syncPresets()
+        syncFrameColors()
+        refreshPresetRow()
+        editorView.filmPreview = prefs.getBoolean(PREF_FILM, false)
+        filmButton.setTextColor(if (editorView.filmPreview) ui.accent else labelColor)
         showTab(adjust = true)
         show(editorScreen)
     }

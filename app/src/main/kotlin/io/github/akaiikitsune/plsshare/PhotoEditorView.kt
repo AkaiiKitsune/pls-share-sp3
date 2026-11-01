@@ -32,6 +32,11 @@ class PhotoEditorView(context: Context) : View(context) {
             invalidate()
         }
 
+    /** Simulate the film's rendering on screen (display only). */
+    var filmPreview = false
+        set(value) { field = value; frameDirty = true; invalidate() }
+    private val filmPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = android.graphics.ColorMatrixColorFilter(PrintRenderer.filmLook) }
+
     /** Show the photo without any look (same framing), while a "compare" button is held. */
     var showOriginal = false
         set(value) { if (field != value) { field = value; invalidate() } }
@@ -193,11 +198,14 @@ class PhotoEditorView(context: Context) : View(context) {
         val quarterTurn = state.rotation % 90f == 0f
         if (withScale && quarterTurn) {
             val r = PrintRenderer.imageRect(b, state)
+            val inner = state.innerRect()
+            val areaW = inner[2] - inner[0]
+            val areaH = inner[3] - inner[1]
             val w = r[2] - r[0]
             val h = r[3] - r[1]
             val target = when {
-                kotlin.math.abs(w - 1f) < SNAP -> w
-                kotlin.math.abs(h - 1f) < SNAP -> h
+                kotlin.math.abs(w - areaW) < SNAP -> w / areaW
+                kotlin.math.abs(h - areaH) < SNAP -> h / areaH
                 else -> 0f
             }
             if (target > 0f) {
@@ -206,8 +214,9 @@ class PhotoEditorView(context: Context) : View(context) {
             }
         }
         val r = PrintRenderer.imageRect(b, state)
-        snappedX = snapAxis(r[0], r[2], quarterTurn) { state.offsetX += it }
-        snappedY = snapAxis(r[1], r[3], quarterTurn) { state.offsetY += it }
+        val inner = state.innerRect()
+        snappedX = snapAxis(r[0], r[2], inner[0], inner[2], quarterTurn) { state.offsetX += it }
+        snappedY = snapAxis(r[1], r[3], inner[1], inner[3], quarterTurn) { state.offsetY += it }
         PrintRenderer.clamp(b, state)
     }
 
@@ -243,9 +252,11 @@ class PhotoEditorView(context: Context) : View(context) {
     }
 
     /** Move an axis so that its left/top edge, right/bottom edge or centre meets the nearest guide within [SNAP]. */
-    private fun snapAxis(low: Float, high: Float, edges: Boolean, move: (Float) -> Unit): Float? {
+    private fun snapAxis(low: Float, high: Float, areaLow: Float, areaHigh: Float, edges: Boolean, move: (Float) -> Unit): Float? {
         val centre = (low + high) / 2
-        val candidates = if (edges) listOf(0f - low to 0f, 1f - high to 1f, 0.5f - centre to 0.5f) else listOf(0.5f - centre to 0.5f)
+        val areaCentre = (areaLow + areaHigh) / 2
+        val candidates = if (edges) listOf(areaLow - low to areaLow, areaHigh - high to areaHigh, areaCentre - centre to areaCentre)
+        else listOf(areaCentre - centre to areaCentre)
         val best = candidates.minByOrNull { kotlin.math.abs(it.first) } ?: return null
         if (kotlin.math.abs(best.first) >= SNAP) return null
         move(best.first)
@@ -432,14 +443,14 @@ class PhotoEditorView(context: Context) : View(context) {
             canvas.drawRect(l, t, l + size, t + size, framePaint)
             return
         }
-        if (state.needsPixelPass || showClipping) {
+        if (state.needsPixelPass || showClipping || filmPreview) {
             val renderSize = if (busy) minOf(size.toInt(), PREVIEW_SIZE) else size.toInt()
             val f = frame
             if (frameDirty || f == null || f.width != renderSize || (!busy && frameInteractive)) {
                 renderFrame(b, renderSize, sharpen = !busy)
             }
             dest.set(l, t, l + size, t + size)
-            canvas.drawBitmap(frame!!, null, dest, scaledPaint)
+            canvas.drawBitmap(frame!!, null, dest, if (filmPreview) filmPaint else scaledPaint)
             if (showClipping) overlay?.let {
                 clipPaint.alpha = if (blinkOn) 230 else 90
                 canvas.drawBitmap(it, null, dest, clipPaint)
