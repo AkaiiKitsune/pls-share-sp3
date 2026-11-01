@@ -129,7 +129,8 @@ class MainActivity : Activity() {
 
     // Editor widgets
     private lateinit var editorView: PhotoEditorView
-    private val sliders = LinkedHashMap<String, Pair<SeekBar, (EditState) -> Int>>()
+    private class SliderEntry(val bar: SeekBar, val value: TextView, val min: Int, val read: (EditState) -> Int)
+    private val sliders = LinkedHashMap<String, SliderEntry>()
     private lateinit var histogramView: HistogramView
     private lateinit var histogramButton: Button
     private lateinit var clippingButton: Button
@@ -137,8 +138,7 @@ class MainActivity : Activity() {
     private var showHistogram = false
     private lateinit var adjustPanel: View
     private lateinit var textsPanel: LinearLayout
-    private lateinit var tabAdjust: Button
-    private lateinit var tabTexts: Button
+    private lateinit var tabs: Ui.Segmented
     private lateinit var overlayList: LinearLayout
     private lateinit var overlayEditor: LinearLayout
     private lateinit var overlayTextField: EditText
@@ -830,10 +830,9 @@ class MainActivity : Activity() {
         root.addView(clippingHint)
         ui.space(root, 14)
 
-        tabAdjust = ui.softButton(s.tabAdjust) { showTab(adjust = true) }
-        tabTexts = ui.softButton(s.tabTexts) { showTab(adjust = false) }
-        root.addView(ui.row(tabAdjust, tabTexts))
-        ui.space(root, 12)
+        tabs = ui.Segmented(listOf(s.tabAdjust, s.tabTexts)) { index -> showTab(adjust = index == 0) }
+        root.addView(tabs.view, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 14)
 
         val adjust = ui.column()
         adjustPanel = adjust
@@ -902,7 +901,7 @@ class MainActivity : Activity() {
         ui.space(adjust, 6)
         slider(adjust, s.temperature, -100, 100, { it.temperature.toInt() }) { v -> editorView.update { temperature = v.toFloat() } }
         slider(adjust, s.tint, -100, 100, { it.tint.toInt() }) { v -> editorView.update { tint = v.toFloat() } }
-        slider(adjust, s.saturation, 0, 200, { (it.saturation * 100f).toInt() }) { v -> editorView.update { saturation = v / 100f }; syncSliders() }
+        slider(adjust, s.saturation, 0, 200, { (it.saturation * 100f).toInt() }, default = 100) { v -> editorView.update { saturation = v / 100f }; syncSliders() }
         ui.space(adjust, 8)
 
         adjust.addView(ui.text(s.details, 14f, bold = true))
@@ -935,8 +934,7 @@ class MainActivity : Activity() {
     private fun showTab(adjust: Boolean) {
         adjustPanel.visibility = if (adjust) View.VISIBLE else View.GONE
         textsPanel.visibility = if (adjust) View.GONE else View.VISIBLE
-        tabAdjust.setTextColor(if (adjust) ui.accent else labelColor)
-        tabTexts.setTextColor(if (adjust) labelColor else ui.accent)
+        tabs.select(if (adjust) 0 else 1)
         editorView.overlayMode = !adjust
         if (!adjust && editorView.selectedOverlay == null) editorView.selectedOverlay = editorView.state.overlays.lastOrNull()
         refreshOverlayPanel()
@@ -1171,10 +1169,13 @@ class MainActivity : Activity() {
         syncFontButtons()
     }
 
-    /** A labelled slider over [min]..[max] whose current value is read from the editor state by [read]. */
-    private fun slider(parent: LinearLayout, label: String, min: Int, max: Int, read: (EditState) -> Int, onValue: (Int) -> Unit) {
+    /**
+     * A labelled slider over [min]..[max] whose current value is read from the editor state by
+     * [read]. Tapping the label puts it back to [default].
+     */
+    private fun slider(parent: LinearLayout, label: String, min: Int, max: Int, read: (EditState) -> Int, default: Int = 0, onValue: (Int) -> Unit) {
         val title = ui.text(label, 13f, alpha = 0.7f)
-        val value = ui.text("", 13f, alpha = 0.7f).apply { gravity = Gravity.END }
+        val value = ui.text(default.toString(), 13f, alpha = 0.7f).apply { gravity = Gravity.END }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(title, LinearLayout.LayoutParams(0, ui.wrap, 1f))
@@ -1183,7 +1184,7 @@ class MainActivity : Activity() {
         parent.addView(header)
         val bar = SeekBar(this).apply {
             this.max = max - min
-            progress = -min
+            progress = default - min
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                     value.text = (progress + min).toString()
@@ -1194,9 +1195,14 @@ class MainActivity : Activity() {
                 override fun onStopTrackingTouch(seekBar: SeekBar) = editorView.endInteraction()
             })
         }
+        header.setOnClickListener {
+            onValue(default)
+            bar.progress = default - min
+            value.text = default.toString()
+        }
         parent.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(parent, 6)
-        sliders[label] = bar to { st -> read(st) - min }
+        sliders[label] = SliderEntry(bar, value, min, read)
     }
 
     private fun syncFrameColors() {
@@ -1263,7 +1269,11 @@ class MainActivity : Activity() {
     }
 
     private fun syncSliders() {
-        for ((bar, read) in sliders.values) bar.progress = read(editorView.state)
+        for (entry in sliders.values) {
+            val v = entry.read(editorView.state)
+            entry.bar.progress = v - entry.min
+            entry.value.text = v.toString()
+        }
         val mono = editorView.state.saturation == 0f
         blackWhiteButton.setTextColor(if (mono) ui.accent else labelColor)
         blackWhiteButton.typeface = if (mono) Typeface.DEFAULT_BOLD else Typeface.DEFAULT

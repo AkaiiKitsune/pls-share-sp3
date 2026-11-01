@@ -19,8 +19,16 @@ class HistogramView(context: Context) : View(context) {
     }
     private val path = Path()
 
+    /** Smooth each channel with a 5-bin box filter: tone curves leave gaps between levels that would otherwise draw as a comb. */
     fun update(channels: Array<IntArray>?) {
-        this.channels = channels
+        this.channels = channels?.map { bins ->
+            IntArray(256) { i ->
+                var sum = 0
+                var n = 0
+                for (j in (i - 2).coerceAtLeast(0)..(i + 2).coerceAtMost(255)) { sum += bins[j]; n++ }
+                sum / n
+            }
+        }?.toTypedArray()
         invalidate()
     }
 

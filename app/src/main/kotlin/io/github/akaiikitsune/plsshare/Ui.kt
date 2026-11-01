@@ -130,6 +130,39 @@ class Ui(private val context: Context) {
         setOnClickListener { onClick() }
     }
 
+    /** A two-segment pill switch, the selected segment filled with the accent. */
+    inner class Segmented(labels: List<String>, private val onSelect: (Int) -> Unit) {
+        val view = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(CARD_STRONG, 24)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        private val segments = labels.mapIndexed { i, label ->
+            TextView(context).apply {
+                text = label
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                typeface = Typeface.DEFAULT_BOLD
+                minimumHeight = dp(40)
+                setOnClickListener { select(i); onSelect(i) }
+                view.addView(this, LinearLayout.LayoutParams(0, wrap, 1f))
+            }
+        }
+        private val defaultColor = segments[0].currentTextColor
+
+        fun select(index: Int) {
+            segments.forEachIndexed { i, t ->
+                if (i == index) {
+                    t.background = rounded(accent, 20)
+                    t.setTextColor(onAccent)
+                } else {
+                    t.background = null
+                    t.setTextColor(defaultColor)
+                }
+            }
+        }
+    }
+
     /** A small round status dot. */
     fun dot(color: Int) = View(context).apply {
         background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(color) }
