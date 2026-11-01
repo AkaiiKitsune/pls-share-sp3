@@ -27,6 +27,7 @@ options:
   --size WxH         print size for --preview (default 800x800; the SP-2 is 600x800)
   --info             show the printer's model, firmware, battery and film
   --off              turn the printer off
+  --transfer-only    send the image to the printer but do not print it (uses no film)
   --simulate         run a fake printer on --host/--port instead (default 0.0.0.0:8080)
   --save-dir DIR     with --simulate, save each received image as a PNG there
   -v                 log every frame
@@ -41,6 +42,7 @@ fun main(args: Array<String>) {
     var size = 800 to 800
     var info = false
     var off = false
+    var transferOnly = false
     var simulate = false
     var saveDir: File? = null
     var verbose = false
@@ -58,6 +60,7 @@ fun main(args: Array<String>) {
             "--size" -> size = next(a).split("x").let { p -> if (p.size != 2) fail("bad --size") else (p[0].toInt() to p[1].toInt()) }
             "--info" -> info = true
             "--off" -> off = true
+            "--transfer-only" -> transferOnly = true
             "--simulate" -> simulate = true
             "--save-dir" -> saveDir = File(next(a))
             "-v", "--verbose" -> verbose = true
@@ -94,7 +97,7 @@ fun main(args: Array<String>) {
                     println("Preview saved to ${preview.path}")
                     return
                 }
-                printer.print(DesktopImages.source(image, fit)) { event ->
+                printer.print(DesktopImages.source(image, fit), transferOnly = transferOnly) { event ->
                     when (event) {
                         PrintEvent.Locking -> println("Connecting to $host:$port...")
                         is PrintEvent.Ready -> println("${event.info.model}, ${event.info.filmRemaining} sheets left, battery ${event.info.batteryLevel}/3")
@@ -102,6 +105,7 @@ fun main(args: Array<String>) {
                         PrintEvent.WaitingForPrinter -> {}
                         is PrintEvent.Printing -> println("Printing, about ${event.estimatedSeconds.toInt()} s...")
                         is PrintEvent.Finished -> println("Done, ${event.filmRemaining} sheets left")
+                        PrintEvent.TransferOnlyFinished -> println("Transfer test done, nothing printed")
                         PrintEvent.Unlocked -> {}
                     }
                 }

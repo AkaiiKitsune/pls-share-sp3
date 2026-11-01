@@ -128,3 +128,22 @@ class InstaxPrinterTest {
         assertThrows(java.io.IOException::class.java) { InstaxPrinter("127.0.0.1", simulator.port, timeoutMillis = 500).info() }
     }
 }
+
+class TransferOnlyTest {
+    @Test
+    fun `transfer only sends the image, resets and never starts a print`() {
+        Simulator(port = 0).start().use { simulator ->
+            val events = mutableListOf<PrintEvent>()
+            val source = ImageSource { w, h -> IntArray(w * h) { 0xFF336699.toInt() } }
+            InstaxPrinter("127.0.0.1", simulator.port, sessionId = 9, sleeper = {}).print(source, transferOnly = true) { events += it }
+            assertEquals(1, simulator.images.size)
+            assertFalse(simulator.opcodes.contains(Opcode.PRINT_START))
+            assertFalse(simulator.opcodes.contains(Opcode.PRINT_STATUS))
+            assertEquals(2, simulator.opcodes.count { it == Opcode.RESET })
+            assertEquals(10, simulator.film)
+            assertEquals(listOf(true, false), simulator.lockHistory)
+            assertTrue(events.contains(PrintEvent.TransferOnlyFinished))
+            assertEquals(PrintEvent.Unlocked, events.last())
+        }
+    }
+}

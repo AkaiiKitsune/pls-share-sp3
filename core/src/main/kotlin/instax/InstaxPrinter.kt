@@ -31,6 +31,8 @@ sealed class PrintEvent {
     object WaitingForPrinter : PrintEvent()
     data class Printing(val estimatedSeconds: Double) : PrintEvent()
     data class Finished(val filmRemaining: Int) : PrintEvent()
+    /** A transfer-only run ended: the image reached the printer and nothing was printed. */
+    object TransferOnlyFinished : PrintEvent()
     object Unlocked : PrintEvent()
 }
 
@@ -169,12 +171,15 @@ class InstaxPrinter(
      *
      * The [source] is asked for pixels at the size the printer reports, so the same call works
      * on an SP-2 (600x800) and an SP-3 (800x800).
+     *
+     * With [transferOnly] the image is sent and the printer is reset instead of printing, which
+     * exercises the whole transfer without using a sheet of film.
      */
-    fun print(source: ImageSource, listener: PrintListener = PrintListener {}) {
+    fun print(source: ImageSource, transferOnly: Boolean = false, listener: PrintListener = PrintListener {}) {
         listener.onEvent(PrintEvent.Locking)
         setLock(true)
         try {
-            doPrint(source, listener)
+            doPrint(source, listener, transferOnly)
         } finally {
             try {
                 setLock(false)
@@ -190,7 +195,7 @@ class InstaxPrinter(
         connect().use { c -> c.send(Opcode.LOCK, Payloads.lock(locked)) }
     }
 
-    private fun doPrint(source: ImageSource, listener: PrintListener) {
+    private fun doPrint(source: ImageSource, listener: PrintListener, transferOnly: Boolean) {
         val info = connect().use { c ->
             val info = readInfo(c)
             if (info.model in UNSUPPORTED_MODELS) throw PrinterException("the ${info.model} is not supported")
@@ -201,12 +206,22 @@ class InstaxPrinter(
         }
         listener.onEvent(PrintEvent.Ready(info))
 
+        logger?.invoke("printer: ${info.model} fw ${info.firmware} battery ${info.batteryLevel}/3${if (info.charging) " charging" else ""} film ${info.filmRemaining} prints ${info.printCount}")
         val data = RawImage.encode(source.render(info.width, info.height), info.width, info.height)
-        logger?.invoke("sending a ${info.width}x${info.height} image to the ${info.model}")
+        logger?.invoke("sending a ${info.width}x${info.height} image (${data.size} bytes) to the ${info.model}")
         connect().use { c -> transfer(c, data, listener) }
         val transferEnd = System.nanoTime()
 
         listener.onEvent(PrintEvent.WaitingForPrinter)
+        if (transferOnly) {
+            connect().use { c ->
+                sendWhenIdle(c, Opcode.VERSION, checkEjecting = true)
+                c.send(Opcode.RESET)
+            }
+            logger?.invoke("transfer-only run: the image was sent and the printer reset, nothing printed")
+            listener.onEvent(PrintEvent.TransferOnlyFinished)
+            return
+        }
         val reply = connect().use { c ->
             sendWhenIdle(c, Opcode.VERSION, checkEjecting = true)
             val elapsed = (System.nanoTime() - transferEnd) / 1_000_000

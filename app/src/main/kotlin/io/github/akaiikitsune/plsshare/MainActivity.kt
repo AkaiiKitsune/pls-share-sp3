@@ -1,6 +1,9 @@
 package io.github.akaiikitsune.plsshare
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
@@ -32,6 +35,10 @@ import instax.PrintEvent
 import instax.PrinterException
 import instax.PrinterInfo
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.ArrayDeque
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -47,6 +54,7 @@ class MainActivity : Activity() {
         private const val PREF_PIN = "pin"
         private const val PREF_HOST = "host"
         private const val PREF_FIT = "fit"
+        private const val JOURNAL_LINES = 400
     }
 
     private val s = Strings.forDefaultLocale()
@@ -66,10 +74,17 @@ class MainActivity : Activity() {
     private lateinit var pickButton: Button
     private lateinit var printButton: Button
     private lateinit var fitSwitch: Switch
+    private lateinit var transferOnlySwitch: Switch
     private lateinit var pinField: EditText
     private lateinit var hostField: EditText
+    private lateinit var journalView: TextView
 
     private var photo: Bitmap? = null
+
+    /** Every step and every frame, newest last. Shown on screen and copyable for bug reports. */
+    private val journal = ArrayDeque<String>()
+    private val journalLock = Any()
+    private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -152,6 +167,12 @@ class MainActivity : Activity() {
             setPadding(dp(4), dp(8), dp(4), dp(8))
         }
         root.addView(fitSwitch)
+
+        transferOnlySwitch = Switch(this).apply {
+            text = s.transferOnly
+            setPadding(dp(4), dp(8), dp(4), dp(8))
+        }
+        root.addView(transferOnlySwitch)
         space(8)
 
         printButton = button(s.print) { print() }.apply {
@@ -184,6 +205,16 @@ class MainActivity : Activity() {
             setText(prefs.getString(PREF_HOST, InstaxPrinter.DEFAULT_HOST))
         }
         root.addView(hostField)
+        space(24)
+
+        root.addView(TextView(this).apply { text = s.journal; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) })
+        root.addView(row(button(s.copyLog) { copyJournal() }, button(s.shareLog) { shareJournal() }))
+        journalView = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            setTextIsSelectable(true)
+        }
+        root.addView(journalView)
 
         return ScrollView(this).apply { addView(root) }
     }
@@ -205,6 +236,35 @@ class MainActivity : Activity() {
 
     private fun log(text: String) {
         logView.text = text
+        journal(text)
+    }
+
+    /** Append a line to the journal from any thread. */
+    private fun journal(text: String) {
+        val line = "${timeFormat.format(Date())} $text"
+        val snapshot: String
+        synchronized(journalLock) {
+            journal.addLast(line)
+            while (journal.size > JOURNAL_LINES) journal.removeFirst()
+            snapshot = journal.joinToString("\n")
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) journalView.text = snapshot
+        else mainHandler.post { journalView.text = snapshot }
+    }
+
+    private fun journalText(): String = synchronized(journalLock) { journal.joinToString("\n") }
+
+    private fun copyJournal() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("pls-share-sp3 log", journalText()))
+        logView.text = s.logCopied
+    }
+
+    private fun shareJournal() {
+        val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_SUBJECT, "pls-share-sp3 log")
+            .putExtra(Intent.EXTRA_TEXT, journalText())
+        startActivity(Intent.createChooser(intent, s.shareLog))
     }
 
     private fun setBusy(busy: Boolean) {
@@ -220,15 +280,23 @@ class MainActivity : Activity() {
 
     private fun connect() {
         setStatus(s.connecting)
+        journal("requesting an INSTAX- network")
         network.connect(object : PrinterNetwork.Listener {
             override fun onConnected() {
+                journal("network available: ${network.network}")
                 setStatus(s.connected)
                 showInfo()
             }
 
-            override fun onFailed() = setStatus(s.connectFailed)
+            override fun onFailed() {
+                journal("network request failed or timed out")
+                setStatus(s.connectFailed)
+            }
 
-            override fun onLost() = setStatus(s.lost)
+            override fun onLost() {
+                journal("network lost")
+                setStatus(s.lost)
+            }
         })
     }
 
@@ -242,7 +310,8 @@ class MainActivity : Activity() {
         }
         val host = hostField.text.toString().trim().ifEmpty { InstaxPrinter.DEFAULT_HOST }
         prefs.edit().putString(PREF_PIN, pin.toString()).putString(PREF_HOST, host).apply()
-        return InstaxPrinter(host = host, pin = pin, socketFactory = network.socketFactory())
+        journal("printer $host pin $pin, network ${network.network ?: "default (not bound)"}")
+        return InstaxPrinter(host = host, pin = pin, socketFactory = network.socketFactory(), logger = { journal(it) })
     }
 
     private fun showInfo() {
@@ -264,11 +333,13 @@ class MainActivity : Activity() {
         infoView.text = s.infoLine.format(
             info.model, info.firmware, info.batteryLevel, if (info.charging) s.charging else "",
             info.filmRemaining, info.printCount,
-        ) + if (info.coverOpen) s.coverOpen else ""
+        ) + (if (info.coverOpen) s.coverOpen else "") +
+            (if (info.batteryLevel == 0 && !info.charging) "\n" + s.lowBattery else "")
         infoView.visibility = View.VISIBLE
     }
 
     private fun showError(e: Throwable) {
+        journal("error: $e")
         log(
             when (e) {
                 is PrinterException -> s.printerError.format(s.describeReturnCode(e.returnCode, e.message ?: ""))
@@ -343,9 +414,11 @@ class MainActivity : Activity() {
         }
         setBusy(true)
         val source = Photos.source(bitmap, fit())
+        val transferOnly = transferOnlySwitch.isChecked
+        journal(if (transferOnly) "starting a transfer-only test (${fit()})" else "starting a print (${fit()})")
         Thread {
             val result = runCatching {
-                printer.print(source) { event -> mainHandler.post { onPrintEvent(event) } }
+                printer.print(source, transferOnly) { event -> mainHandler.post { onPrintEvent(event) } }
             }
             mainHandler.post {
                 printing.set(false)
@@ -370,7 +443,8 @@ class MainActivity : Activity() {
             }
             is PrintEvent.Printing -> log(s.printing.format(event.estimatedSeconds.toInt()))
             is PrintEvent.Finished -> log(s.done.format(event.filmRemaining))
-            PrintEvent.Unlocked -> {}
+            PrintEvent.TransferOnlyFinished -> log(s.transferOnlyDone)
+            PrintEvent.Unlocked -> journal("unlocked")
         }
     }
 }

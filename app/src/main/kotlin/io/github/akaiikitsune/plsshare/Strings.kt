@@ -40,6 +40,13 @@ class Strings private constructor(private val fr: Boolean) {
     val infoLine get() = t("%s · firmware %s · batterie %d/3%s · %d photos restantes · %d tirages au total", "%s · firmware %s · battery %d/3%s · %d sheets left · %d prints in total")
     val charging get() = t(" (en charge)", " (charging)")
     val coverOpen get() = t(" · capot ouvert !", " · cover open!")
+    val transferOnly get() = t("Mode test : envoyer l'image sans imprimer (n'utilise pas de film)", "Test mode: send the image without printing (uses no film)")
+    val transferOnlyDone get() = t("Test terminé : l'image est arrivée dans l'imprimante, rien n'a été imprimé.", "Test finished: the image reached the printer, nothing was printed.")
+    val lowBattery get() = t("⚠️ Batterie de l'imprimante faible : branchez-la avant d'imprimer.", "⚠️ Printer battery low: plug it in before printing.")
+    val journal get() = t("Journal", "Log")
+    val copyLog get() = t("Copier le journal", "Copy log")
+    val shareLog get() = t("Partager le journal", "Share log")
+    val logCopied get() = t("Journal copié.", "Log copied.")
     val shared get() = t("Photo reçue. Connectez l'imprimante puis appuyez sur Imprimer.", "Photo received. Connect the printer and tap Print.")
     val hint get() = t(
         "Allumez l'imprimante, appuyez sur « Connecter », puis choisissez le réseau INSTAX-XXXXXXXX dans la fenêtre d'Android. " +
