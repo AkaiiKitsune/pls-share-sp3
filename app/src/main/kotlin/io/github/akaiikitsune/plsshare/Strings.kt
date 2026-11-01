@@ -63,7 +63,7 @@ class Strings private constructor(private val fr: Boolean) {
     val brightness get() = t("Luminosité", "Brightness")
     val contrast get() = t("Contraste", "Contrast")
     val saturation get() = t("Saturation", "Saturation")
-    val editorHint get() = t("Pincez pour zoomer, glissez pour déplacer. Le bord épais du tirage est en bas.", "Pinch to zoom, drag to move. The thick edge of the print is at the bottom.")
+    val editorHint get() = t("Pincez pour zoomer, glissez pour déplacer. Les bords et le centre s'aimantent au cadre. Le bord épais du tirage est en bas.", "Pinch to zoom, drag to move. Edges and centre snap to the frame. The thick edge of the print is at the bottom.")
 
     // Menu
     val menuGuide get() = t("Guide de connexion", "Connection guide")

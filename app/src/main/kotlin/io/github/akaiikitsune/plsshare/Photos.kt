@@ -68,6 +68,17 @@ object PrintRenderer {
         return contain / fill
     }
 
+    /** Where the photo sits in the square, as fractions of the print size: left, top, right, bottom. */
+    fun imageRect(bitmap: Bitmap, state: EditState): FloatArray {
+        val (w, h) = rotatedSize(bitmap, state)
+        val fill = maxOf(1f / w, 1f / h) * state.scale
+        val halfW = w * fill / 2
+        val halfH = h * fill / 2
+        val cx = 0.5f + state.offsetX
+        val cy = 0.5f + state.offsetY
+        return floatArrayOf(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
+    }
+
     /** Keep the photo at least touching the square, so it cannot be dragged out of sight. */
     fun clamp(bitmap: Bitmap, state: EditState) {
         state.scale = state.scale.coerceIn(EditState.MIN_SCALE, EditState.MAX_SCALE)
