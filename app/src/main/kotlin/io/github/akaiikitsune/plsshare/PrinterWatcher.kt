@@ -8,8 +8,12 @@ import java.io.IOException
 import java.util.concurrent.Executors
 
 /**
- * Watches the phone's Wi-Fi and asks the printer for its status every few seconds, so the
- * screen shows "connected" by itself once the user has joined the INSTAX network.
+ * Keeps the connection status up to date without bothering the printer.
+ *
+ * The Wi-Fi state is read locally every few seconds (no traffic). The printer itself is only
+ * asked for its status when the phone arrives on its network (retrying until it answers, since
+ * the SP-3 needs 1 to 2 minutes after switching on), after a print, or on an explicit [refresh].
+ * Once it has answered, nothing more is sent until the network changes.
  */
 class PrinterWatcher(
     private val network: PrinterNetwork,
@@ -24,7 +28,11 @@ class PrinterWatcher(
     }
 
     companion object {
-        private const val INTERVAL_MS = 4_000L
+        /** How often the local Wi-Fi state is checked. */
+        private const val WIFI_INTERVAL_MS = 3_000L
+
+        /** How often the printer is asked again while it does not answer yet. */
+        private const val PROBE_INTERVAL_MS = 5_000L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -32,6 +40,7 @@ class PrinterWatcher(
 
     @Volatile var paused = false
     private var running = false
+    private var lastProbe = 0L
 
     var state: State = State.NoWifi
         private set
@@ -39,8 +48,8 @@ class PrinterWatcher(
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
-            if (!paused) executor.execute { probe() }
-            mainHandler.postDelayed(this, INTERVAL_MS)
+            if (!paused) executor.execute { check(force = false) }
+            mainHandler.postDelayed(this, WIFI_INTERVAL_MS)
         }
     }
 
@@ -55,27 +64,45 @@ class PrinterWatcher(
         mainHandler.removeCallbacks(tick)
     }
 
-    /** Probe right now, for example after a print. */
+    /** Ask the printer right now, for example after a print or when the user taps the status. */
     fun refresh() {
-        executor.execute { probe() }
+        executor.execute { check(force = true) }
     }
 
-    private fun probe() {
-        val next: State = when {
+    private fun check(force: Boolean) {
+        val wifiState: State? = when {
             network.currentWifi() == null -> State.NoWifi
             !network.isPrinterNetwork() -> State.OtherWifi
-            else -> try {
-                State.Connected(printerFactory().info())
-            } catch (e: IOException) {
-                State.WaitingForPrinter
-            } catch (e: instax.InstaxException) {
-                // Wrong PIN or similar: the printer is there, let the print attempt report it.
-                State.WaitingForPrinter
-            }
+            else -> null
         }
+        if (wifiState != null) {
+            publish(wifiState)
+            return
+        }
+        // On the printer's network. Only talk to the printer when we do not know it is there yet.
+        val now = System.currentTimeMillis()
+        val needProbe = force || state !is State.Connected
+        if (!needProbe || (!force && now - lastProbe < PROBE_INTERVAL_MS)) {
+            if (state !is State.Connected && state !is State.WaitingForPrinter) publish(State.WaitingForPrinter)
+            return
+        }
+        lastProbe = now
+        val next = try {
+            State.Connected(printerFactory().info())
+        } catch (e: IOException) {
+            State.WaitingForPrinter
+        } catch (e: instax.InstaxException) {
+            // Wrong PIN or similar: the printer is there, let the print attempt report it.
+            State.WaitingForPrinter
+        }
+        publish(next)
+    }
+
+    private fun publish(next: State) {
         mainHandler.post {
+            val changed = next != state
             state = next
-            onState(next)
+            if (changed) onState(next)
         }
     }
 }

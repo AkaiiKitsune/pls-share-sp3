@@ -207,6 +207,7 @@ class MainActivity : Activity() {
         }
         val statusCard = ui.card(statusRow)
         statusCard.addView(statusAction, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(12) })
+        statusCard.setOnClickListener { watcher.refresh() }
         root.addView(statusCard)
         ui.space(root, 16)
 

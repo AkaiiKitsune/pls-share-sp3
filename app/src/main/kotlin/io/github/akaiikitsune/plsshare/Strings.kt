@@ -20,7 +20,7 @@ class Strings private constructor(private val fr: Boolean) {
     val waitingPrinter get() = t("Imprimante en préparation…", "Printer getting ready…")
     val waitingPrinterDetail get() = t("Réseau INSTAX actif. L'imprimante met 1 à 2 minutes à répondre après l'allumage.", "INSTAX network active. The printer needs 1 to 2 minutes to answer after switching on.")
     val connected get() = t("Connectée", "Connected")
-    val connectedDetail get() = t("%s · %d films · batterie %d/3%s", "%s · %d sheets · battery %d/3%s")
+    val connectedDetail get() = t("%s · %d films · batterie %d/3%s · toucher pour actualiser", "%s · %d sheets · battery %d/3%s · tap to refresh")
     val charging get() = t(" (en charge)", " (charging)")
     val coverOpen get() = t("Capot du film ouvert", "Film cover open")
     val noFilm get() = t("Plus de film", "Out of film")
