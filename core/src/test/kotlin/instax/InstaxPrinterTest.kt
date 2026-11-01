@@ -8,6 +8,13 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
+/** Fake time: every sleep advances the clock instead of waiting. */
+class FakeTime {
+    var nanos = 0L
+    val sleeper: (Long) -> Unit = { nanos += it * 1_000_000 }
+    val clock: () -> Long = { nanos }
+}
+
 class InstaxPrinterTest {
     private val simulator = Simulator(port = 0, printPolls = 2).start()
 
@@ -104,9 +111,10 @@ class InstaxPrinterTest {
     @Test
     fun `print that never finishes times out`() {
         simulator.printPolls = 1_000_000
-        var now = 0L
-        val printer = InstaxPrinter("127.0.0.1", simulator.port, sessionId = 7, sleeper = { now += it })
+        val time = FakeTime()
+        val printer = InstaxPrinter("127.0.0.1", simulator.port, sessionId = 7, sleeper = time.sleeper, clock = time.clock)
         assertThrows(PrintTimeoutException::class.java) { printer.print(gradient) }
+        assertTrue(time.nanos >= InstaxPrinter.MIN_PRINT_TIMEOUT * 1_000_000)
         assertEquals(listOf(true, false), simulator.lockHistory)
     }
 
@@ -123,9 +131,10 @@ class InstaxPrinterTest {
 
     @Test
     fun `nothing listening is a network error`() {
-        simulator.close()
+        // Port 1 (tcpmux) has no listener on any sane machine, unlike a just-closed ephemeral port that
+        // the OS may hand to another socket.
         var sleeps = 0
-        val printer = InstaxPrinter("127.0.0.1", simulator.port, timeoutMillis = 500, sleeper = { sleeps++ })
+        val printer = InstaxPrinter("127.0.0.1", 1, timeoutMillis = 500, sleeper = { sleeps++ })
         assertFalse(printer.ping())
         assertThrows(java.io.IOException::class.java) { printer.info() }
         assertEquals(2 * (InstaxPrinter.CONNECT_ATTEMPTS - 1), sleeps)
@@ -181,11 +190,8 @@ class ReachabilityTest {
 
     @Test
     fun `gives up after the reach timeout`() {
-        val probe = Simulator(port = 0)
-        val port = probe.port
-        probe.close()
         var waited = 0L
-        val printer = InstaxPrinter("127.0.0.1", port, timeoutMillis = 300, reachTimeoutMillis = 0, sessionId = 6, sleeper = { waited += it })
+        val printer = InstaxPrinter("127.0.0.1", 1, timeoutMillis = 300, reachTimeoutMillis = 0, sessionId = 6, sleeper = { waited += it })
         assertThrows(java.io.IOException::class.java) { printer.waitUntilReachable() }
         assertEquals(2 * InstaxPrinter.CONNECT_RETRY_DELAY, waited)
     }

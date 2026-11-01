@@ -71,6 +71,8 @@ class InstaxPrinter(
     private val socketFactory: SocketFactory = SocketFactory.getDefault(),
     private val sessionId: Int = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
     private val sleeper: (Long) -> Unit = Thread::sleep,
+    /** Monotonic clock in nanoseconds, injectable so tests can fake time together with [sleeper]. */
+    private val clock: () -> Long = System::nanoTime,
     private val logger: ((String) -> Unit)? = null,
 ) {
     init {
@@ -181,14 +183,14 @@ class InstaxPrinter(
      * [onAttempt] is told about every failed attempt. Throws the last error on timeout.
      */
     fun waitUntilReachable(onAttempt: ((Int, IOException) -> Unit)? = null): PrinterInfo {
-        val deadline = System.nanoTime() + reachTimeoutMillis * 1_000_000
+        val deadline = clock() + reachTimeoutMillis * 1_000_000
         var attempt = 0
         while (true) {
             attempt++
             try {
                 return info()
             } catch (e: IOException) {
-                if (System.nanoTime() >= deadline) throw e
+                if (clock() >= deadline) throw e
                 logger?.invoke("printer not reachable yet (attempt $attempt: ${shortReason(e)}), waiting")
                 onAttempt?.invoke(attempt, e)
                 sleeper(REACH_RETRY_DELAY)
@@ -256,7 +258,7 @@ class InstaxPrinter(
         val data = RawImage.encode(source.render(info.width, info.height), info.width, info.height)
         logger?.invoke("sending a ${info.width}x${info.height} image (${data.size} bytes) to the ${info.model}")
         connect().use { c -> transfer(c, data, listener) }
-        val transferEnd = System.nanoTime()
+        val transferEnd = clock()
 
         listener.onEvent(PrintEvent.WaitingForPrinter)
         if (transferOnly) {
@@ -270,7 +272,7 @@ class InstaxPrinter(
         }
         val reply = connect().use { c ->
             sendWhenIdle(c, Opcode.VERSION, checkEjecting = true)
-            val elapsed = (System.nanoTime() - transferEnd) / 1_000_000
+            val elapsed = (clock() - transferEnd) / 1_000_000
             if (elapsed < TRANSFER_SETTLE_TIME) sleeper(TRANSFER_SETTLE_TIME - elapsed)
             sendWhenIdle(c, Opcode.PRINT_START)
         }
@@ -300,23 +302,23 @@ class InstaxPrinter(
 
     /** Send a command, repeating it while the printer reports that it is busy. */
     private fun sendWhenIdle(c: Connection, opcode: Int, checkEjecting: Boolean = false): Response {
-        val deadline = System.nanoTime() + READY_TIMEOUT * 1_000_000
+        val deadline = clock() + READY_TIMEOUT * 1_000_000
         while (true) {
             val response = c.send(opcode, allow = BUSY)
             if (response.returnCode !in BUSY && !(checkEjecting && response.ejecting)) return response
-            if (System.nanoTime() >= deadline) throw PrinterException("the printer stayed busy", response.returnCode)
+            if (clock() >= deadline) throw PrinterException("the printer stayed busy", response.returnCode)
             sleeper(POLL_INTERVAL)
         }
     }
 
     private fun waitForPrint(estimateSeconds: Double): Response {
         val timeout = maxOf((3 * estimateSeconds * 1000).toLong(), MIN_PRINT_TIMEOUT)
-        val deadline = System.nanoTime() + timeout * 1_000_000
+        val deadline = clock() + timeout * 1_000_000
         while (true) {
             sleeper(POLL_INTERVAL)
             val response = connect().use { c -> c.send(Opcode.PRINT_STATUS, allow = STILL_PRINTING + PRINT_FINISHED) }
             if (response.returnCode in PRINT_FINISHED) return response
-            if (System.nanoTime() >= deadline) throw PrintTimeoutException("the printer did not report that the print finished")
+            if (clock() >= deadline) throw PrintTimeoutException("the printer did not report that the print finished")
         }
     }
 
