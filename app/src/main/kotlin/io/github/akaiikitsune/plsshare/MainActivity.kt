@@ -281,8 +281,7 @@ class MainActivity : Activity() {
             addView(statusTexts, LinearLayout.LayoutParams(0, ui.wrap, 1f))
             addView(statusSpinner, LinearLayout.LayoutParams(ui.dp(24), ui.dp(24)).apply { marginStart = ui.dp(8) })
         }
-        val statusCard = ui.card(statusRow)
-        statusCard.addView(statusAction, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(12) })
+        val statusCard = ui.card(statusRow, statusAction)
         statusCard.setOnClickListener { watcher.refresh() }
         root.addView(statusCard)
         ui.space(root, 16)
@@ -322,11 +321,11 @@ class MainActivity : Activity() {
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
-            visibility = View.INVISIBLE
+            visibility = View.GONE
         }
         root.addView(progressBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        messageView = ui.text("", 14f)
-        root.addView(messageView)
+        messageView = ui.text("", 14f).apply { visibility = View.GONE }
+        root.addView(messageView, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
         ui.space(root, 16)
 
         // Queue card
@@ -490,12 +489,13 @@ class MainActivity : Activity() {
 
     private fun message(text: String) {
         messageView.text = text
+        messageView.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
         if (text.isNotBlank()) journal(text)
     }
 
     private fun setBusy(busy: Boolean) {
         updateButtons()
-        progressBar.visibility = if (busy) View.VISIBLE else View.INVISIBLE
+        progressBar.visibility = if (busy) View.VISIBLE else View.GONE
         progressBar.isIndeterminate = busy
         watcher.paused = busy
         if (busy) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1387,6 +1387,7 @@ class MainActivity : Activity() {
         }
         if (status.message.isNotEmpty()) {
             messageView.text = if (status.total > 1) "${status.index}/${status.total} · ${status.message}" else status.message
+            messageView.visibility = View.VISIBLE
         }
         if (status.running) {
             progressBar.isIndeterminate = status.progress < 0

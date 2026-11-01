@@ -80,9 +80,11 @@ class Ui(private val context: Context) {
         parent.addView(View(context), ViewGroup.LayoutParams(match, dp(heightDp)))
     }
 
-    fun card(vararg children: View, padding: Int = 16, color: Int = CARD) = column(padding).apply {
+    fun card(vararg children: View, padding: Int = 16, color: Int = CARD, gap: Int = 10) = column(padding).apply {
         background = rounded(color)
-        for (c in children) addView(c, LinearLayout.LayoutParams(match, wrap))
+        children.forEachIndexed { i, c ->
+            addView(c, LinearLayout.LayoutParams(match, wrap).apply { if (i > 0) topMargin = dp(gap) })
+        }
     }
 
     fun text(value: CharSequence, sizeSp: Float = 15f, bold: Boolean = false, alpha: Float = 1f, color: Int? = null) =

@@ -46,7 +46,7 @@ class PrintPreviewView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
-        val margin = width * 0.06f
+        val margin = width * 0.12f
         val cardW = width - 2 * margin
         val cardH = cardW * HEIGHT_MM / WIDTH_MM
         val left = margin
