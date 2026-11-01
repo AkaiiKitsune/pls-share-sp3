@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -24,13 +25,38 @@ class PhotoEditorView(context: Context) : View(context) {
     var showClipping = false
         set(value) { field = value; frameDirty = true; invalidate() }
 
-    // The square is rendered off screen so the per-pixel steps (tone curve, sharpening) can run
-    // on it. While a finger moves, sharpening is skipped to keep the gesture smooth.
+    /** Whether the histogram wants the pixels of the square. */
+    var wantHistogram = false
+        set(value) { field = value; histogramDirty = true; invalidate() }
+
+    // When per-pixel steps are needed (tone curve, sharpening, clipping overlay) the square is
+    // rendered off screen. While a finger moves or a slider is dragged, that render is done at
+    // PREVIEW_SIZE without sharpening and scaled up, and the full-size render happens on release.
+    // Without per-pixel steps the photo is drawn straight to the (hardware) canvas.
     private var frame: Bitmap? = null
     private var framePixels: IntArray? = null
     private var overlay: Bitmap? = null
+    private var overlayPixels: IntArray? = null
     private var frameDirty = true
-    private var frameSharpened = false
+    private var frameInteractive = false
+    private var histogramDirty = true
+    private var histogramFrame: Bitmap? = null
+    private var histogramPixels: IntArray? = null
+    private val scaledPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val dest = RectF()
+
+    /** A slider is being dragged: render fast until [endInteraction]. */
+    private var interactive = false
+
+    fun beginInteraction() {
+        interactive = true
+    }
+
+    fun endInteraction() {
+        interactive = false
+        frameDirty = true
+        invalidate()
+    }
 
     private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -71,6 +97,10 @@ class PhotoEditorView(context: Context) : View(context) {
     companion object {
         /** How close (fraction of the print size) an edge must be to a guide to stick to it. */
         private const val SNAP = 0.02f
+
+        /** Side of the off-screen render while interacting, and of the histogram sample. */
+        private const val PREVIEW_SIZE = 480
+        private const val HISTOGRAM_SIZE = 192
 
         /** Degrees of twist ignored before a rotation starts, so pinching does not rotate by accident. */
         private const val TWIST_DEAD_ZONE = 4f
@@ -188,12 +218,13 @@ class PhotoEditorView(context: Context) : View(context) {
 
     private fun changed() {
         frameDirty = true
+        histogramDirty = true
         invalidate()
         onChanged?.invoke()
     }
 
-    /** Re-render the square into [frame], with the per-pixel steps. */
-    private fun renderFrame(b: Bitmap, size: Int) {
+    /** Re-render the square into [frame] at [size] pixels, with the per-pixel steps. */
+    private fun renderFrame(b: Bitmap, size: Int, sharpen: Boolean) {
         var f = frame
         if (f == null || f.width != size) {
             f = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
@@ -203,18 +234,30 @@ class PhotoEditorView(context: Context) : View(context) {
         }
         val pixels = framePixels!!
         PrintRenderer.draw(Canvas(f), b, state, 0f, 0f, size.toFloat())
-        val sharpen = !touching
         f.getPixels(pixels, 0, size, 0, 0, size, size)
         if (state.needsPixelPass) {
             Processing.apply(pixels, size, size, state, sharpen)
             f.setPixels(pixels, 0, size, 0, 0, size, size)
         }
-        frameSharpened = sharpen || state.sharpness == 0f
         if (showClipping) {
             val o = overlay ?: Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { overlay = it }
-            o.setPixels(Processing.clipping(pixels), 0, size, 0, 0, size, size)
+            val op = overlayPixels?.takeIf { it.size == pixels.size } ?: IntArray(pixels.size).also { overlayPixels = it }
+            Processing.clipping(pixels, op)
+            o.setPixels(op, 0, size, 0, 0, size, size)
         }
         frameDirty = false
+        frameInteractive = !sharpen
+    }
+
+    /** A small render of the square, with the tone curve, for the histogram. */
+    private fun renderHistogram(b: Bitmap) {
+        val size = HISTOGRAM_SIZE
+        val f = histogramFrame ?: Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { histogramFrame = it }
+        val pixels = histogramPixels ?: IntArray(size * size).also { histogramPixels = it }
+        PrintRenderer.draw(Canvas(f), b, state, 0f, 0f, size.toFloat())
+        f.getPixels(pixels, 0, size, 0, 0, size, size)
+        if (state.needsPixelPass) Processing.apply(pixels, size, size, state, sharpen = false)
+        histogramDirty = false
         onFrame?.invoke(pixels, size)
     }
 
@@ -259,7 +302,7 @@ class PhotoEditorView(context: Context) : View(context) {
                 touching = false
                 twisting = false
                 snappedX = null; snappedY = null; snappedScale = false; snappedRotation = false
-                if (!frameSharpened) frameDirty = true
+                if (frameInteractive) frameDirty = true
                 invalidate()
             }
         }
@@ -277,9 +320,20 @@ class PhotoEditorView(context: Context) : View(context) {
         }
         val l = left()
         val t = top()
-        if (frameDirty || frame == null) renderFrame(b, size.toInt())
-        canvas.drawBitmap(frame!!, l, t, null)
-        if (showClipping) overlay?.let { canvas.drawBitmap(it, l, t, null) }
+        val busy = touching || interactive
+        if (state.needsPixelPass || showClipping) {
+            val renderSize = if (busy) minOf(size.toInt(), PREVIEW_SIZE) else size.toInt()
+            val f = frame
+            if (frameDirty || f == null || f.width != renderSize || (!busy && frameInteractive)) {
+                renderFrame(b, renderSize, sharpen = !busy)
+            }
+            dest.set(l, t, l + size, t + size)
+            canvas.drawBitmap(frame!!, null, dest, scaledPaint)
+            if (showClipping) overlay?.let { canvas.drawBitmap(it, null, dest, scaledPaint) }
+        } else {
+            PrintRenderer.draw(canvas, b, state, l, t, size)
+        }
+        if (wantHistogram && histogramDirty) renderHistogram(b)
         if (touching) {
             // Rule-of-thirds grid while editing.
             for (i in 1..2) {

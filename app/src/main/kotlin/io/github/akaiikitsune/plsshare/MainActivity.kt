@@ -71,6 +71,9 @@ class MainActivity : Activity() {
         private const val MENU_DEBUG = 3
         private const val MENU_UPDATE = 4
         private const val THUMB_SIZE = 96
+
+        /** Longest side of the copy the editor works on. */
+        private const val EDITOR_SOURCE_SIDE = 1400
     }
 
     private val s = Strings.forDefaultLocale()
@@ -121,6 +124,9 @@ class MainActivity : Activity() {
     private var labelColor = 0
 
     private var photo: Bitmap? = null
+
+    /** A smaller copy of [photo] for the editor: enough for the screen, much faster to draw. */
+    private var editorPhoto: Bitmap? = null
     private val editState = EditState()
 
     /** The printer address, mirrored from the debug field so background threads never touch a view. */
@@ -526,7 +532,9 @@ class MainActivity : Activity() {
             mainHandler.post {
                 result.onSuccess {
                     photo?.recycle()
+                    editorPhoto?.recycle()
                     photo = it
+                    editorPhoto = Photos.scaledForEditing(it, EDITOR_SOURCE_SIDE)
                     editState.reset()
                     refreshPreview()
                     updateButtons()
@@ -598,7 +606,7 @@ class MainActivity : Activity() {
         // Histogram and clipping, below the photo
         histogramView = HistogramView(this).apply { visibility = View.GONE }
         root.addView(histogramView, LinearLayout.LayoutParams(ui.match, ui.dp(72)))
-        editorView.onFrame = { pixels, _ -> if (showHistogram) histogramView.update(Processing.histogram(pixels)) }
+        editorView.onFrame = { pixels, _ -> histogramView.update(Processing.histogram(pixels, stride = 1)) }
         histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
         clippingButton = ui.softButton(s.clipping) { toggleClipping() }
         clippingHint = ui.text(s.clippingHint, 12f, alpha = 0.6f).apply { visibility = View.GONE; gravity = Gravity.CENTER }
@@ -650,8 +658,8 @@ class MainActivity : Activity() {
                     if (fromUser) onValue(progress + min)
                 }
 
-                override fun onStartTrackingTouch(seekBar: SeekBar) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar) {}
+                override fun onStartTrackingTouch(seekBar: SeekBar) = editorView.beginInteraction()
+                override fun onStopTrackingTouch(seekBar: SeekBar) = editorView.endInteraction()
             })
         }
         parent.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
@@ -667,7 +675,7 @@ class MainActivity : Activity() {
         showHistogram = !showHistogram
         histogramView.visibility = if (showHistogram) View.VISIBLE else View.GONE
         histogramButton.setTextColor(if (showHistogram) Ui.ACCENT else labelColor)
-        if (showHistogram) editorView.invalidateFrame()
+        editorView.wantHistogram = showHistogram
     }
 
     private fun toggleClipping() {
@@ -693,7 +701,7 @@ class MainActivity : Activity() {
     }
 
     private fun openEditor() {
-        val bitmap = photo ?: return pickPhoto()
+        val bitmap = editorPhoto ?: photo ?: return pickPhoto()
         editorView.bitmap = bitmap
         editorView.state.copyFrom(editState)
         buildThumbnails(bitmap)

@@ -216,6 +216,14 @@ object Photos {
     /** The longest side a loaded photo is kept at. The print is 800 px, so this leaves room for zooming. */
     private const val MAX_SIDE = 2400
 
+    /** A copy no larger than [maxSide] on its longest side, or the bitmap itself if already small enough. */
+    fun scaledForEditing(bitmap: Bitmap, maxSide: Int): Bitmap {
+        val longest = maxOf(bitmap.width, bitmap.height)
+        if (longest <= maxSide) return bitmap
+        val scale = maxSide.toFloat() / longest
+        return Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.width * scale), Math.round(bitmap.height * scale), true)
+    }
+
     /** Decode a photo with its EXIF rotation applied, downsampled to about [MAX_SIDE], as a software bitmap. */
     fun load(resolver: ContentResolver, uri: Uri): Bitmap {
         val source = ImageDecoder.createSource(resolver, uri)

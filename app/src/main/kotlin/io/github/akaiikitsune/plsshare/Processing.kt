@@ -94,8 +94,7 @@ object Processing {
     const val CLIP_LOW = 0xA03070FF.toInt()
 
     /** An overlay marking blown highlights (any channel ≥ 253) in red and crushed shadows (all ≤ 2) in blue. */
-    fun clipping(pixels: IntArray): IntArray {
-        val out = IntArray(pixels.size)
+    fun clipping(pixels: IntArray, out: IntArray = IntArray(pixels.size)): IntArray {
         for (i in pixels.indices) {
             val p = pixels[i]
             val r = (p shr 16) and 0xFF; val g = (p shr 8) and 0xFF; val b = p and 0xFF
