@@ -128,6 +128,8 @@ class MainActivity : Activity() {
     private lateinit var overlayDarkSwitch: Switch
     private lateinit var blackWhiteButton: Button
     private val fontButtons = LinkedHashMap<Overlay.Font, Button>()
+    private lateinit var overlayMarginBar: SeekBar
+    private lateinit var overlayMarginValue: TextView
     private var photoDate: Long? = null
     private lateinit var presetRow: LinearLayout
     private val presetTiles = LinkedHashMap<String, Pair<ImageView, TextView>>()
@@ -730,7 +732,9 @@ class MainActivity : Activity() {
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                     if (!fromUser) return
-                    editorView.selectedOverlay?.size = (progress + 15) / 1000f
+                    val o = editorView.selectedOverlay ?: return
+                    o.size = (progress + 15) / 1000f
+                    o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
                     editorView.overlaysChanged()
                 }
 
@@ -769,6 +773,29 @@ class MainActivity : Activity() {
             }
             overlayEditor.addView(ui.row(cells[0], cells[1], cells[2], gap = 6), LinearLayout.LayoutParams(ui.match, ui.wrap).apply { bottomMargin = ui.dp(6) })
         }
+        val marginHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ui.text(s.overlayMargin, 13f, alpha = 0.7f), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            overlayMarginValue = ui.text("", 13f, alpha = 0.7f)
+            addView(overlayMarginValue, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+        }
+        overlayEditor.addView(marginHeader)
+        overlayMarginBar = SeekBar(this).apply {
+            max = 25
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    overlayMarginValue.text = "$progress %"
+                    if (!fromUser) return
+                    val o = editorView.selectedOverlay ?: return
+                    o.margin = progress / 100f
+                    o.anchor?.let { setOverlayAnchor(it) }
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar) {}
+            })
+        }
+        overlayEditor.addView(overlayMarginBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(overlayEditor, 6)
         overlayEditor.addView(ui.row(
             ui.softButton(s.styleShadow) { setOverlayStyle(Overlay.Style.SHADOW) },
@@ -794,7 +821,9 @@ class MainActivity : Activity() {
     }
 
     private fun setOverlayFont(font: Overlay.Font) {
-        editorView.selectedOverlay?.font = font
+        val o = editorView.selectedOverlay ?: return
+        o.font = font
+        o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
         editorView.overlaysChanged()
         syncFontButtons()
     }
@@ -853,6 +882,8 @@ class MainActivity : Activity() {
         if (o.kind == Overlay.Kind.TEXT && overlayTextField.text.toString() != o.text) overlayTextField.setText(o.text)
         overlaySizeBar.progress = (o.size * 1000f).toInt() - 15
         overlayDarkSwitch.isChecked = o.dark
+        overlayMarginBar.progress = Math.round(o.margin * 100f)
+        overlayMarginValue.text = "${overlayMarginBar.progress} %"
         syncFontButtons()
     }
 

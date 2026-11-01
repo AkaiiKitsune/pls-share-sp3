@@ -388,6 +388,7 @@ class PhotoEditorView(context: Context) : View(context) {
                 if (o != null && event.pointerCount == 1) {
                     o.x = (o.x + (event.x - lastX) / size).coerceIn(0.02f, 0.98f)
                     o.y = (o.y + (event.y - lastY) / size).coerceIn(0.02f, 0.98f)
+                    o.anchor = null
                     lastX = event.x; lastY = event.y
                     overlaysChanged()
                 }

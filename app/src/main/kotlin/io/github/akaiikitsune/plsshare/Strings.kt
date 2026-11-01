@@ -92,6 +92,7 @@ class Strings private constructor(private val fr: Boolean) {
     val remove get() = t("Supprimer", "Remove")
     val overlayFont get() = t("Police", "Font")
     val overlayPosition get() = t("Position", "Position")
+    val overlayMargin get() = t("Marge d'alignement", "Alignment margin")
     fun fontName(font: Overlay.Font): String = when (font) {
         Overlay.Font.BOLD -> t("Gras", "Bold")
         Overlay.Font.LIGHT -> t("Fin", "Light")

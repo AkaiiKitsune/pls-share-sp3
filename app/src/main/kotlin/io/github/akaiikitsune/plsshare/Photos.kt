@@ -25,6 +25,10 @@ class Overlay(
     var dark: Boolean = false,
     var style: Style = Style.SHADOW,
     var font: Font = Font.BOLD,
+    /** The last anchor used by the placement grid, re-applied when the margin changes. */
+    var anchor: Anchor? = null,
+    /** Margin between the text and the edge for anchored placement, as a fraction of the print size. */
+    var margin: Float = 0.06f,
 ) {
     enum class Kind { TEXT, DATE, TIME, DATETIME }
     enum class Style { SHADOW, OUTLINE, PILL }
@@ -50,14 +54,15 @@ class Overlay(
     }
 
     /** Place the text against an anchor, keeping [margin] of the print between the text and the edge. */
-    fun place(anchor: Anchor, widthFraction: Float, margin: Float = 0.06f) {
+    fun place(anchor: Anchor, widthFraction: Float) {
+        this.anchor = anchor
         val halfW = widthFraction / 2
         val halfH = size * 0.7f
         x = when (anchor.h) { -1 -> margin + halfW; 1 -> 1f - margin - halfW; else -> 0.5f }.coerceIn(0.02f, 0.98f)
         y = when (anchor.v) { -1 -> margin + halfH; 1 -> 1f - margin - halfH; else -> 0.5f }.coerceIn(0.02f, 0.98f)
     }
 
-    fun copy() = Overlay(kind, text, x, y, size, dark, style, font)
+    fun copy() = Overlay(kind, text, x, y, size, dark, style, font, anchor, margin)
 
     /** The string to draw, resolving date kinds against [photoDate] (or now). */
     fun resolve(photoDate: Long?): String {
