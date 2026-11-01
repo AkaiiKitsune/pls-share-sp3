@@ -79,12 +79,12 @@ jobs:
       # Every push to the main development branch refreshes the rolling "nightly" pre-release,
       # so the APK is always one click away and the in-app updater can find it.
       - name: Move the nightly tag to this commit
-        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !startsWith(github.ref, 'refs/tags/')
         run: |
           git tag -f nightly
           git push -f origin nightly
       - name: Publish the nightly pre-release
-        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
