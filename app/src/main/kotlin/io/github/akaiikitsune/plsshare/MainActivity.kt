@@ -788,7 +788,30 @@ class MainActivity : Activity() {
         root.addView(editorView, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 8)
         root.addView(ui.text(s.editorHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
-        ui.space(root, 12)
+        ui.space(root, 10)
+
+        // Tools under the photo, available in both tabs: compare, film preview, histogram, clipping.
+        histogramView = HistogramView(this).apply { visibility = View.GONE }
+        root.addView(histogramView, LinearLayout.LayoutParams(ui.match, ui.dp(72)))
+        editorView.onFrame = { pixels, _ -> histogramView.update(Processing.histogram(pixels, stride = 1)) }
+        histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
+        clippingButton = ui.softButton(s.clipping) { toggleClipping() }
+        clippingHint = ui.text(s.clippingHint, 12f, alpha = 0.6f).apply { visibility = View.GONE; gravity = Gravity.CENTER }
+        val compareButton = ui.softButton(s.compare) {}.apply {
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> { editorView.showOriginal = true; v.isPressed = true }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { editorView.showOriginal = false; v.isPressed = false }
+                }
+                true
+            }
+        }
+        filmButton = ui.softButton(s.filmPreview) { setFilmPreview(!editorView.filmPreview) }
+        root.addView(ui.row(compareButton, filmButton, gap = 6))
+        ui.space(root, 6)
+        root.addView(ui.row(histogramButton, clippingButton, gap = 6))
+        root.addView(clippingHint)
+        ui.space(root, 14)
 
         tabAdjust = ui.softButton(s.tabAdjust) { showTab(adjust = true) }
         tabTexts = ui.softButton(s.tabTexts) { showTab(adjust = false) }
@@ -833,26 +856,6 @@ class MainActivity : Activity() {
             presetRow.addView(tile, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(10) })
         }
         adjust.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
-        ui.space(adjust, 16)
-
-        // Histogram and clipping, below the photo
-        histogramView = HistogramView(this).apply { visibility = View.GONE }
-        adjust.addView(histogramView, LinearLayout.LayoutParams(ui.match, ui.dp(72)))
-        editorView.onFrame = { pixels, _ -> histogramView.update(Processing.histogram(pixels, stride = 1)) }
-        histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
-        clippingButton = ui.softButton(s.clipping) { toggleClipping() }
-        clippingHint = ui.text(s.clippingHint, 12f, alpha = 0.6f).apply { visibility = View.GONE; gravity = Gravity.CENTER }
-        val compareButton = ui.softButton(s.compare) {}.apply {
-            setOnTouchListener { v, event ->
-                when (event.actionMasked) {
-                    android.view.MotionEvent.ACTION_DOWN -> { editorView.showOriginal = true; v.isPressed = true }
-                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { editorView.showOriginal = false; v.isPressed = false }
-                }
-                true
-            }
-        }
-        adjust.addView(ui.row(compareButton, histogramButton, clippingButton, gap = 6))
-        adjust.addView(clippingHint)
         ui.space(adjust, 16)
 
         adjust.addView(ui.text(s.myPresets, 14f, bold = true))

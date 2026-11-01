@@ -119,6 +119,9 @@ class Ui(private val context: Context) {
     fun softButton(label: String, onClick: () -> Unit) = Button(context).apply {
         text = label
         isAllCaps = false
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        setPadding(dp(12), 0, dp(12), 0)
         minimumHeight = dp(44)
         background = RippleDrawable(android.content.res.ColorStateList.valueOf(CARD_STRONG), rounded(CARD_STRONG, 22), null)
         stateListAnimator = null
