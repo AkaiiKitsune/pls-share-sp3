@@ -236,7 +236,7 @@ class MainActivity : Activity() {
 
     private fun log(text: String) {
         logView.text = text
-        journal(text)
+        if (text.isNotBlank()) journal(text)
     }
 
     /** Append a line to the journal from any thread. */
@@ -344,7 +344,8 @@ class MainActivity : Activity() {
             when (e) {
                 is PrinterException -> s.printerError.format(s.describeReturnCode(e.returnCode, e.message ?: ""))
                 is InstaxException -> s.printerError.format(e.message)
-                is IOException -> s.networkError.format(e.message ?: e.javaClass.simpleName)
+                is IOException -> if (e.message?.contains("ECONNREFUSED") == true) s.refused.format("ECONNREFUSED")
+                else s.networkError.format(e.message ?: e.javaClass.simpleName)
                 else -> e.toString()
             },
         )

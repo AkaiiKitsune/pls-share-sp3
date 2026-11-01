@@ -35,6 +35,7 @@ class Strings private constructor(private val fr: Boolean) {
     val done get() = t("Tirage terminé ! Il reste %d photos.", "Print finished! %d sheets left.")
     val cancelled get() = t("Annulé.", "Cancelled.")
     val networkError get() = t("Impossible de joindre l'imprimante (%s). Êtes-vous sur le Wi-Fi INSTAX-… ?", "Could not reach the printer (%s). Are you on the INSTAX-… Wi-Fi?")
+    val refused get() = t("L'imprimante est sur le Wi-Fi mais refuse les connexions (%s). Chargez du film, éteignez-la, rallumez-la, puis « Connecter ».", "The printer is on the Wi-Fi but refuses connections (%s). Load film, switch it off and on, then tap Connect.")
     val printerError get() = t("L'imprimante a répondu : %s", "The printer answered: %s")
     val photoError get() = t("Impossible de lire cette photo : %s", "Could not read this photo: %s")
     val infoLine get() = t("%s · firmware %s · batterie %d/3%s · %d photos restantes · %d tirages au total", "%s · firmware %s · battery %d/3%s · %d sheets left · %d prints in total")

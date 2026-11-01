@@ -124,8 +124,11 @@ class InstaxPrinterTest {
     @Test
     fun `nothing listening is a network error`() {
         simulator.close()
-        assertFalse(InstaxPrinter("127.0.0.1", simulator.port, timeoutMillis = 500).ping())
-        assertThrows(java.io.IOException::class.java) { InstaxPrinter("127.0.0.1", simulator.port, timeoutMillis = 500).info() }
+        var sleeps = 0
+        val printer = InstaxPrinter("127.0.0.1", simulator.port, timeoutMillis = 500, sleeper = { sleeps++ })
+        assertFalse(printer.ping())
+        assertThrows(java.io.IOException::class.java) { printer.info() }
+        assertEquals(2 * (InstaxPrinter.CONNECT_ATTEMPTS - 1), sleeps)
     }
 }
 

@@ -84,6 +84,10 @@ class InstaxPrinter(
         /** A print may take up to three times the printer's own estimate, but no less than this. */
         const val MIN_PRINT_TIMEOUT = 30_000L
 
+        /** The printer sometimes refuses or ignores a connection right after another one; try again. */
+        const val CONNECT_ATTEMPTS = 3
+        const val CONNECT_RETRY_DELAY = 1_500L
+
         const val RAW_RGB_FORMAT = 16
 
         /** Chunk size to use when the printer's transfer start reply does not give one. */
@@ -120,15 +124,21 @@ class InstaxPrinter(
     }
 
     private fun connect(): Connection {
-        val socket = socketFactory.createSocket()
-        try {
-            socket.soTimeout = timeoutMillis
-            socket.connect(InetSocketAddress(host, port), timeoutMillis)
-        } catch (e: IOException) {
-            socket.close()
-            throw e
+        var attempt = 1
+        while (true) {
+            val socket = socketFactory.createSocket()
+            try {
+                socket.soTimeout = timeoutMillis
+                socket.connect(InetSocketAddress(host, port), timeoutMillis)
+                return Connection(socket)
+            } catch (e: IOException) {
+                socket.close()
+                if (attempt >= CONNECT_ATTEMPTS) throw e
+                logger?.invoke("connection attempt $attempt failed (${e.message}), retrying")
+                attempt++
+                sleeper(CONNECT_RETRY_DELAY)
+            }
         }
-        return Connection(socket)
     }
 
     /** The printer's model, versions, battery, film and print size. */
