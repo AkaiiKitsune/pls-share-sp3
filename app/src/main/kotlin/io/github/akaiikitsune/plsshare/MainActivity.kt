@@ -108,11 +108,17 @@ class MainActivity : Activity() {
 
     // Editor widgets
     private lateinit var editorView: PhotoEditorView
-    private lateinit var brightnessBar: SeekBar
-    private lateinit var contrastBar: SeekBar
-    private lateinit var saturationBar: SeekBar
+    private val sliders = LinkedHashMap<String, Pair<SeekBar, (EditState) -> Int>>()
+    private lateinit var histogramView: HistogramView
+    private lateinit var histogramButton: Button
+    private lateinit var clippingButton: Button
+    private lateinit var clippingHint: TextView
+    private var showHistogram = false
     private lateinit var presetRow: LinearLayout
     private val presetTiles = LinkedHashMap<String, Pair<ImageView, TextView>>()
+
+    /** The theme's default label colour, restored when a toggle or a preset is deselected. */
+    private var labelColor = 0
 
     private var photo: Bitmap? = null
     private val editState = EditState()
@@ -576,6 +582,7 @@ class MainActivity : Activity() {
                 clipToOutline = true
             }
             val label = ui.text(s.filterName(preset.id), 12f).apply { gravity = Gravity.CENTER }
+            labelColor = label.currentTextColor
             val tile = ui.column().apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 addView(thumb, LinearLayout.LayoutParams(ui.dp(68), ui.dp(68)))
@@ -588,21 +595,59 @@ class MainActivity : Activity() {
         root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
         ui.space(root, 16)
 
-        brightnessBar = slider(root, s.brightness) { v -> editorView.update { brightness = v - 100f } }
-        contrastBar = slider(root, s.contrast) { v -> editorView.update { contrast = v - 100f } }
-        saturationBar = slider(root, s.saturation) { v -> editorView.update { saturation = v / 100f } }
+        // Histogram and clipping, below the photo
+        histogramView = HistogramView(this).apply { visibility = View.GONE }
+        root.addView(histogramView, LinearLayout.LayoutParams(ui.match, ui.dp(72)))
+        editorView.onFrame = { pixels, _ -> if (showHistogram) histogramView.update(Processing.histogram(pixels)) }
+        histogramButton = ui.softButton(s.histogram) { toggleHistogram() }
+        clippingButton = ui.softButton(s.clipping) { toggleClipping() }
+        clippingHint = ui.text(s.clippingHint, 12f, alpha = 0.6f).apply { visibility = View.GONE; gravity = Gravity.CENTER }
+        root.addView(ui.row(histogramButton, clippingButton))
+        root.addView(clippingHint)
+        ui.space(root, 16)
+
+        root.addView(ui.text(s.light, 14f, bold = true))
+        ui.space(root, 6)
+        slider(root, s.brightness, -100, 100, { it.brightness.toInt() }) { v -> editorView.update { brightness = v.toFloat() } }
+        slider(root, s.contrast, -100, 100, { it.contrast.toInt() }) { v -> editorView.update { contrast = v.toFloat() } }
+        slider(root, s.highlights, -100, 100, { it.highlights.toInt() }) { v -> editorView.update { highlights = v.toFloat() } }
+        slider(root, s.shadows, -100, 100, { it.shadows.toInt() }) { v -> editorView.update { shadows = v.toFloat() } }
+        slider(root, s.whites, -100, 100, { it.whites.toInt() }) { v -> editorView.update { whites = v.toFloat() } }
+        slider(root, s.blacks, -100, 100, { it.blacks.toInt() }) { v -> editorView.update { blacks = v.toFloat() } }
+        ui.space(root, 8)
+
+        root.addView(ui.text(s.colour, 14f, bold = true))
+        ui.space(root, 6)
+        slider(root, s.temperature, -100, 100, { it.temperature.toInt() }) { v -> editorView.update { temperature = v.toFloat() } }
+        slider(root, s.tint, -100, 100, { it.tint.toInt() }) { v -> editorView.update { tint = v.toFloat() } }
+        slider(root, s.saturation, 0, 200, { (it.saturation * 100f).toInt() }) { v -> editorView.update { saturation = v / 100f } }
+        ui.space(root, 8)
+
+        root.addView(ui.text(s.details, 14f, bold = true))
+        ui.space(root, 6)
+        slider(root, s.sharpness, 0, 100, { it.sharpness.toInt() }) { v -> editorView.update { sharpness = v.toFloat() } }
+        slider(root, s.vignette, 0, 100, { it.vignette.toInt() }) { v -> editorView.update { vignette = v.toFloat() } }
 
         return ScrollView(this).apply { addView(root) }
     }
 
-    private fun slider(parent: LinearLayout, label: String, onValue: (Int) -> Unit): SeekBar {
-        parent.addView(ui.text(label, 13f, alpha = 0.7f))
+    /** A labelled slider over [min]..[max] whose current value is read from the editor state by [read]. */
+    private fun slider(parent: LinearLayout, label: String, min: Int, max: Int, read: (EditState) -> Int, onValue: (Int) -> Unit) {
+        val title = ui.text(label, 13f, alpha = 0.7f)
+        val value = ui.text("", 13f, alpha = 0.7f).apply { gravity = Gravity.END }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(title, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            addView(value, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+        }
+        parent.addView(header)
         val bar = SeekBar(this).apply {
-            max = 200
-            progress = 100
+            this.max = max - min
+            progress = -min
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                    if (fromUser) onValue(progress)
+                    value.text = (progress + min).toString()
+                    if (fromUser) onValue(progress + min)
                 }
 
                 override fun onStartTrackingTouch(seekBar: SeekBar) {}
@@ -610,14 +655,25 @@ class MainActivity : Activity() {
             })
         }
         parent.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(parent, 8)
-        return bar
+        ui.space(parent, 6)
+        sliders[label] = bar to { st -> read(st) - min }
     }
 
     private fun syncSliders() {
-        brightnessBar.progress = (editorView.state.brightness + 100f).toInt()
-        contrastBar.progress = (editorView.state.contrast + 100f).toInt()
-        saturationBar.progress = (editorView.state.saturation * 100f).toInt()
+        for ((bar, read) in sliders.values) bar.progress = read(editorView.state)
+    }
+
+    private fun toggleHistogram() {
+        showHistogram = !showHistogram
+        histogramView.visibility = if (showHistogram) View.VISIBLE else View.GONE
+        histogramButton.setTextColor(if (showHistogram) Ui.ACCENT else labelColor)
+        if (showHistogram) editorView.invalidateFrame()
+    }
+
+    private fun toggleClipping() {
+        editorView.showClipping = !editorView.showClipping
+        clippingButton.setTextColor(if (editorView.showClipping) Ui.ACCENT else labelColor)
+        clippingHint.visibility = if (editorView.showClipping) View.VISIBLE else View.GONE
     }
 
     private fun syncPresets() {
@@ -626,7 +682,7 @@ class MainActivity : Activity() {
             val (thumb, label) = views
             thumb.alpha = if (id == selected) 1f else 0.55f
             label.typeface = if (id == selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-            label.setTextColor(if (id == selected) Ui.ACCENT else label.currentTextColor and 0x00FFFFFF or (0xFF shl 24))
+            label.setTextColor(if (id == selected) Ui.ACCENT else labelColor)
         }
     }
 

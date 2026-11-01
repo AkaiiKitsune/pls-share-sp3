@@ -13,9 +13,24 @@ import android.view.View
 /** A square view showing the print as it will come out, with pinch-to-zoom and drag-to-pan. */
 class PhotoEditorView(context: Context) : View(context) {
     var bitmap: Bitmap? = null
-        set(value) { field = value; invalidate() }
+        set(value) { field = value; frameDirty = true; invalidate() }
     val state = EditState()
     var onChanged: (() -> Unit)? = null
+
+    /** Called with the processed pixels of the square after each full render, for the histogram. */
+    var onFrame: ((IntArray, Int) -> Unit)? = null
+
+    /** Paint blown highlights and crushed shadows over the photo. */
+    var showClipping = false
+        set(value) { field = value; frameDirty = true; invalidate() }
+
+    // The square is rendered off screen so the per-pixel steps (tone curve, sharpening) can run
+    // on it. While a finger moves, sharpening is skipped to keep the gesture smooth.
+    private var frame: Bitmap? = null
+    private var framePixels: IntArray? = null
+    private var overlay: Bitmap? = null
+    private var frameDirty = true
+    private var frameSharpened = false
 
     private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -172,8 +187,41 @@ class PhotoEditorView(context: Context) : View(context) {
     private fun top() = (height - side()) / 2f
 
     private fun changed() {
+        frameDirty = true
         invalidate()
         onChanged?.invoke()
+    }
+
+    /** Re-render the square into [frame], with the per-pixel steps. */
+    private fun renderFrame(b: Bitmap, size: Int) {
+        var f = frame
+        if (f == null || f.width != size) {
+            f = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            frame = f
+            framePixels = IntArray(size * size)
+            overlay = null
+        }
+        val pixels = framePixels!!
+        PrintRenderer.draw(Canvas(f), b, state, 0f, 0f, size.toFloat())
+        val sharpen = !touching
+        f.getPixels(pixels, 0, size, 0, 0, size, size)
+        if (state.needsPixelPass) {
+            Processing.apply(pixels, size, size, state, sharpen)
+            f.setPixels(pixels, 0, size, 0, 0, size, size)
+        }
+        frameSharpened = sharpen || state.sharpness == 0f
+        if (showClipping) {
+            val o = overlay ?: Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { overlay = it }
+            o.setPixels(Processing.clipping(pixels), 0, size, 0, 0, size, size)
+        }
+        frameDirty = false
+        onFrame?.invoke(pixels, size)
+    }
+
+    /** Force a full re-render (for example to feed the histogram after it was switched on). */
+    fun invalidateFrame() {
+        frameDirty = true
+        invalidate()
     }
 
     /** Apply a change made from outside (buttons, sliders). */
@@ -205,6 +253,7 @@ class PhotoEditorView(context: Context) : View(context) {
                 touching = false
                 twisting = false
                 snappedX = null; snappedY = null; snappedScale = false; snappedRotation = false
+                if (!frameSharpened) frameDirty = true
                 invalidate()
             }
         }
@@ -220,9 +269,11 @@ class PhotoEditorView(context: Context) : View(context) {
             canvas.drawColor(Color.TRANSPARENT)
             return
         }
-        PrintRenderer.draw(canvas, b, state, left(), top(), size)
         val l = left()
         val t = top()
+        if (frameDirty || frame == null) renderFrame(b, size.toInt())
+        canvas.drawBitmap(frame!!, l, t, null)
+        if (showClipping) overlay?.let { canvas.drawBitmap(it, l, t, null) }
         if (touching) {
             // Rule-of-thirds grid while editing.
             for (i in 1..2) {
