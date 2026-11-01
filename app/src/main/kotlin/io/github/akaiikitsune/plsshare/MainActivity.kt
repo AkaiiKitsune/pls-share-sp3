@@ -848,8 +848,7 @@ class MainActivity : Activity() {
             }
         }
         filmButton = ui.softButton(s.filmPreview) { setFilmPreview(!editorView.filmPreview) }.apply { tooltipText = s.filmPreviewHint }
-        root.addView(ui.row(compareButton, filmButton, gap = 6))
-        ui.space(root, 14)
+        val compareRow = ui.row(compareButton, filmButton, gap = 6)
 
         tabs = ui.Segmented(listOf(s.tabAdjust, s.tabTexts)) { index -> showTab(adjust = index == 0) }
         root.addView(tabs.view, LinearLayout.LayoutParams(ui.match, ui.wrap))
@@ -862,8 +861,10 @@ class MainActivity : Activity() {
         textsPanel.visibility = View.GONE
         root.addView(textsPanel, LinearLayout.LayoutParams(ui.match, ui.wrap))
 
+        adjust.addView(compareRow)
+        ui.space(adjust, 6)
         adjust.addView(ui.row(histogramButton, clippingButton, gap = 6))
-        ui.space(adjust, 10)
+        ui.space(adjust, 14)
         adjust.addView(ui.row(
             ui.softButton(s.rotate) { editorView.update { rotation = (Math.round(rotation / 90f) + 1) * 90f % 360f } },
             ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
