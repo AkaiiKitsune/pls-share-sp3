@@ -21,6 +21,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
@@ -136,6 +137,18 @@ class MainActivity : Activity() {
         debug = prefs.getBoolean(PREF_DEBUG, false)
 
         container = FrameLayout(this)
+        // Android 15 draws apps edge to edge: keep the content clear of the status bar, the
+        // navigation bar and the camera cutout.
+        container.setOnApplyWindowInsetsListener { view, insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            } else {
+                @Suppress("DEPRECATION")
+                view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            }
+            insets
+        }
         homeView = buildHome()
         editorScreen = buildEditor()
         guideView = buildGuide()
