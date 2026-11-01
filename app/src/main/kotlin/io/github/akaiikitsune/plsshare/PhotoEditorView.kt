@@ -240,7 +240,12 @@ class PhotoEditorView(context: Context) : View(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { touching = true; invalidate() }
+            MotionEvent.ACTION_DOWN -> {
+                // Keep the scrolling page from stealing vertical drags while a finger is on the photo.
+                parent?.requestDisallowInterceptTouchEvent(true)
+                touching = true
+                invalidate()
+            }
             MotionEvent.ACTION_POINTER_DOWN -> if (event.pointerCount == 2) {
                 twisting = true
                 twistArmed = false
@@ -250,6 +255,7 @@ class PhotoEditorView(context: Context) : View(context) {
             MotionEvent.ACTION_MOVE -> if (twisting && event.pointerCount >= 2) onTwist(event)
             MotionEvent.ACTION_POINTER_UP -> if (event.pointerCount <= 2) { twisting = false; snappedRotation = false }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
                 touching = false
                 twisting = false
                 snappedX = null; snappedY = null; snappedScale = false; snappedRotation = false
