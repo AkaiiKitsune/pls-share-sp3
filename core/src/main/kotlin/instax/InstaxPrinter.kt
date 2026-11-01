@@ -66,6 +66,8 @@ class InstaxPrinter(
      * Zero means a single attempt (plus the short [CONNECT_ATTEMPTS] retries).
      */
     val reachTimeoutMillis: Long = 0,
+    /** How many times a single connection is attempted before giving up. */
+    val connectAttempts: Int = CONNECT_ATTEMPTS,
     private val socketFactory: SocketFactory = SocketFactory.getDefault(),
     private val sessionId: Int = (System.currentTimeMillis() and 0xFFFFFFFFL).toInt(),
     private val sleeper: (Long) -> Unit = Thread::sleep,
@@ -144,7 +146,7 @@ class InstaxPrinter(
                 return Connection(socket)
             } catch (e: IOException) {
                 socket.close()
-                if (attempt >= CONNECT_ATTEMPTS) throw e
+                if (attempt >= connectAttempts) throw e
                 logger?.invoke("connection attempt $attempt failed (${e.message}), retrying")
                 attempt++
                 sleeper(CONNECT_RETRY_DELAY)

@@ -1,13 +1,13 @@
 package io.github.akaiikitsune.plsshare
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
@@ -24,10 +24,13 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import instax.InstaxException
@@ -43,7 +46,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * One screen: connect to the printer, pick a photo, print.
+ * The app: one activity, three screens swapped in a container (home, editor, connection guide).
  *
  * The UI is built in code with framework widgets only, so the app has no library dependencies
  * beyond the `core` protocol module.
@@ -54,50 +57,99 @@ class MainActivity : Activity() {
         private const val PREFS = "settings"
         private const val PREF_PIN = "pin"
         private const val PREF_HOST = "host"
-        private const val PREF_FIT = "fit"
+        private const val PREF_DEBUG = "debug"
         private const val JOURNAL_LINES = 400
+        private const val PREVIEW_SIZE = 800
 
         /** The SP-3 needs 60 to 90 s after a Wi-Fi association before it accepts connections. */
         private const val REACH_TIMEOUT_MS = 120_000L
+
+        private const val MENU_GUIDE = 1
+        private const val MENU_PIN = 2
+        private const val MENU_DEBUG = 3
     }
 
     private val s = Strings.forDefaultLocale()
+    private val ui by lazy { Ui(this) }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val printing = AtomicBoolean(false)
 
     private lateinit var network: PrinterNetwork
+    private lateinit var watcher: PrinterWatcher
     private lateinit var prefs: SharedPreferences
 
-    private lateinit var statusView: TextView
-    private lateinit var infoView: TextView
-    private lateinit var previewView: ImageView
-    private lateinit var progressBar: ProgressBar
-    private lateinit var logView: TextView
-    private lateinit var connectButton: Button
-    private lateinit var infoButton: Button
-    private lateinit var currentWifiButton: Button
+    private lateinit var container: FrameLayout
+    private lateinit var homeView: View
+    private lateinit var editorScreen: View
+    private lateinit var guideView: View
+
+    // Home widgets
+    private lateinit var statusDot: View
+    private lateinit var statusTitle: TextView
+    private lateinit var statusDetail: TextView
+    private lateinit var statusSpinner: ProgressBar
+    private lateinit var statusAction: Button
+    private lateinit var previewImage: ImageView
+    private lateinit var previewHint: TextView
     private lateinit var pickButton: Button
+    private lateinit var editButton: Button
     private lateinit var printButton: Button
-    private lateinit var fitSwitch: Switch
-    private lateinit var transferOnlySwitch: Switch
-    private lateinit var pinField: EditText
+    private lateinit var progressBar: ProgressBar
+    private lateinit var messageView: TextView
+    private lateinit var debugCard: View
     private lateinit var hostField: EditText
+    private lateinit var transferOnlySwitch: Switch
     private lateinit var journalView: TextView
 
-    private var photo: Bitmap? = null
+    // Editor widgets
+    private lateinit var editorView: PhotoEditorView
+    private lateinit var brightnessBar: SeekBar
+    private lateinit var contrastBar: SeekBar
+    private lateinit var saturationBar: SeekBar
 
-    /** Every step and every frame, newest last. Shown on screen and copyable for bug reports. */
+    private var photo: Bitmap? = null
+    private val editState = EditState()
+
+    /** The printer address, mirrored from the debug field so background threads never touch a view. */
+    @Volatile private var currentHost = InstaxPrinter.DEFAULT_HOST
+    private var connected: PrinterInfo? = null
+    private var debug = false
+
+    /** Every step and every frame, newest last. Shown in debug mode and copyable for bug reports. */
     private val journal = ArrayDeque<String>()
     private val journalLock = Any()
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
+    // ---------------------------------------------------------------- Lifecycle
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        actionBar?.hide()
         network = PrinterNetwork(this)
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        setContentView(buildUi())
-        setStatus(s.notConnected)
+        debug = prefs.getBoolean(PREF_DEBUG, false)
+
+        container = FrameLayout(this)
+        homeView = buildHome()
+        editorScreen = buildEditor()
+        guideView = buildGuide()
+        container.addView(homeView)
+        setContentView(container)
+        applyDebugVisibility()
+
+        watcher = PrinterWatcher(network, { probePrinter() }, ::onWatcherState)
+        onWatcherState(PrinterWatcher.State.NoWifi)
         handleShareIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        watcher.start()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        watcher.stop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -110,275 +162,291 @@ class MainActivity : Activity() {
         if (!printing.get()) network.disconnect()
     }
 
-    // ---------------------------------------------------------------- UI
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (container.getChildAt(0) !== homeView) show(homeView) else @Suppress("DEPRECATION") super.onBackPressed()
+    }
 
-    private fun dp(value: Int): Int =
-        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
+    private fun show(screen: View) {
+        container.removeAllViews()
+        container.addView(screen)
+    }
 
-    private fun buildUi(): View {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(24))
+    // ---------------------------------------------------------------- Home screen
+
+    private fun buildHome(): View {
+        val root = ui.column(20)
+
+        lateinit var menuButton: Button
+        menuButton = ui.softButton("⋮") { showMenu(menuButton) }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.title(s.title), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            addView(menuButton, LinearLayout.LayoutParams(ui.dp(48), ui.dp(44)))
         }
-        fun space(h: Int) = root.addView(View(this), ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(h)))
+        root.addView(header)
+        ui.space(root, 16)
 
-        root.addView(TextView(this).apply {
-            text = s.title
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
-            typeface = Typeface.DEFAULT_BOLD
-        })
-        root.addView(TextView(this).apply {
-            text = s.subtitle
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-        })
-        space(16)
-
-        statusView = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f) }
-        root.addView(statusView)
-        infoView = TextView(this).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            visibility = View.GONE
+        // Status card
+        statusDot = ui.dot(Ui.WARN)
+        statusTitle = ui.text("", 16f, bold = true)
+        statusDetail = ui.text("", 13f, alpha = 0.8f)
+        statusSpinner = ProgressBar(this).apply { visibility = View.GONE }
+        statusAction = ui.softButton(s.guide) { show(guideView) }
+        val statusTexts = ui.column().apply {
+            addView(statusTitle)
+            addView(statusDetail)
         }
-        root.addView(infoView)
-        space(8)
-
-        root.addView(row(
-            button(s.connect) { connect() }.also { connectButton = it },
-            button(s.info) { showInfo() }.also { infoButton = it },
-        ))
-        root.addView(row(
-            button(s.useCurrentWifi) { useCurrentWifi() }.also { currentWifiButton = it },
-            button(s.openWifiSettings) { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) },
-        ))
-        space(16)
-
-        previewView = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(0x22808080)
-            adjustViewBounds = true
-            contentDescription = s.pickPhoto
-            setOnClickListener { pickPhoto() }
+        val statusRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(statusDot, LinearLayout.LayoutParams(ui.dp(12), ui.dp(12)).apply { marginEnd = ui.dp(12) })
+            addView(statusTexts, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            addView(statusSpinner, LinearLayout.LayoutParams(ui.dp(24), ui.dp(24)).apply { marginStart = ui.dp(8) })
         }
-        root.addView(previewView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300)))
-        space(8)
+        val statusCard = ui.card(statusRow)
+        statusCard.addView(statusAction, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(12) })
+        root.addView(statusCard)
+        ui.space(root, 16)
 
-        pickButton = button(s.pickPhoto) { pickPhoto() }
-        root.addView(pickButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-
-        fitSwitch = Switch(this).apply {
-            isChecked = prefs.getString(PREF_FIT, "crop") == "contain"
-            text = if (isChecked) s.fitContain else s.fitCrop
-            setOnCheckedChangeListener { _, checked ->
-                text = if (checked) s.fitContain else s.fitCrop
-                prefs.edit().putString(PREF_FIT, if (checked) "contain" else "crop").apply()
-                refreshPreview()
+        // Preview
+        previewImage = object : ImageView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val w = MeasureSpec.getSize(widthMeasureSpec)
+                setMeasuredDimension(w, w)
             }
-            setPadding(dp(4), dp(8), dp(4), dp(8))
+        }.apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = ui.rounded(Ui.CARD, 20)
+            clipToOutline = true
+            contentDescription = s.pickPhoto
+            setOnClickListener { if (photo == null) pickPhoto() else openEditor() }
         }
-        root.addView(fitSwitch)
+        previewHint = ui.text(s.tapToPick, 14f, alpha = 0.6f).apply { gravity = Gravity.CENTER }
+        val previewFrame = FrameLayout(this).apply {
+            addView(previewImage, FrameLayout.LayoutParams(ui.match, ui.wrap))
+            addView(previewHint, FrameLayout.LayoutParams(ui.wrap, ui.wrap, Gravity.CENTER))
+        }
+        root.addView(previewFrame)
+        ui.space(root, 12)
 
-        transferOnlySwitch = Switch(this).apply {
-            text = s.transferOnly
-            setPadding(dp(4), dp(8), dp(4), dp(8))
-        }
-        root.addView(transferOnlySwitch)
-        space(8)
+        pickButton = ui.softButton(s.pickPhoto) { pickPhoto() }
+        editButton = ui.softButton(s.edit) { openEditor() }
+        root.addView(ui.row(pickButton, editButton))
+        ui.space(root, 12)
 
-        printButton = button(s.print) { print() }.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            minimumHeight = dp(56)
-        }
-        root.addView(printButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        printButton = ui.primaryButton(s.print) { print() }
+        root.addView(printButton, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 12)
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
             visibility = View.INVISIBLE
         }
-        root.addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        logView = TextView(this).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f) }
-        root.addView(logView)
-        space(24)
+        root.addView(progressBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        messageView = ui.text("", 14f)
+        root.addView(messageView)
+        ui.space(root, 24)
 
-        root.addView(TextView(this).apply { text = s.hint; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); alpha = 0.75f })
-        space(8)
-        root.addView(TextView(this).apply { text = s.staticHint; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); alpha = 0.75f })
-        space(16)
+        debugCard = buildDebugCard()
+        root.addView(debugCard)
 
-        root.addView(TextView(this).apply { text = s.pin; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) })
-        pinField = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(prefs.getString(PREF_PIN, InstaxPrinter.DEFAULT_PIN.toString()))
-        }
-        root.addView(pinField)
-        root.addView(TextView(this).apply { text = s.host; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) })
+        return ScrollView(this).apply { addView(root) }
+    }
+
+    private fun buildDebugCard(): View {
+        currentHost = prefs.getString(PREF_HOST, InstaxPrinter.DEFAULT_HOST) ?: InstaxPrinter.DEFAULT_HOST
         hostField = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setText(prefs.getString(PREF_HOST, InstaxPrinter.DEFAULT_HOST))
+            setText(currentHost)
+            hint = s.host
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(text: android.text.Editable?) {
+                    currentHost = text.toString().trim().ifEmpty { InstaxPrinter.DEFAULT_HOST }
+                    prefs.edit().putString(PREF_HOST, currentHost).apply()
+                }
+            })
         }
-        root.addView(hostField)
-        space(24)
-
-        root.addView(TextView(this).apply { text = s.journal; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) })
-        root.addView(row(button(s.copyLog) { copyJournal() }, button(s.shareLog) { shareJournal() }))
+        transferOnlySwitch = Switch(this).apply { text = s.transferOnly }
+        val requestButton = ui.softButton(s.requestNetwork) { requestNetwork() }
         journalView = TextView(this).apply {
             typeface = Typeface.MONOSPACE
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             setTextIsSelectable(true)
         }
-        root.addView(journalView)
-
-        return ScrollView(this).apply { addView(root) }
+        return ui.card(
+            ui.text(s.debugTitle, 16f, bold = true),
+            ui.text(s.host, 13f, alpha = 0.7f),
+            hostField,
+            transferOnlySwitch,
+            requestButton,
+            ui.text(s.journal, 13f, alpha = 0.7f),
+            ui.row(ui.softButton(s.copyLog) { copyJournal() }, ui.softButton(s.shareLog) { shareJournal() }),
+            journalView,
+        )
     }
 
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        setOnClickListener { onClick() }
+    private fun applyDebugVisibility() {
+        debugCard.visibility = if (debug) View.VISIBLE else View.GONE
+        if (debug) journalView.text = journalText()
     }
 
-    private fun row(vararg views: View) = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        for (v in views) addView(v, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+    private fun showMenu(anchor: View) {
+        val menu = PopupMenu(this, anchor)
+        menu.menu.add(0, MENU_GUIDE, 0, s.menuGuide)
+        menu.menu.add(0, MENU_PIN, 1, s.menuPin)
+        menu.menu.add(0, MENU_DEBUG, 2, s.menuDebug).apply { isCheckable = true; isChecked = debug }
+        menu.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                MENU_GUIDE -> show(guideView)
+                MENU_PIN -> askPin()
+                MENU_DEBUG -> {
+                    debug = !debug
+                    prefs.edit().putBoolean(PREF_DEBUG, debug).apply()
+                    applyDebugVisibility()
+                }
+            }
+            true
+        }
+        menu.show()
     }
 
-    private fun setStatus(text: String) {
-        statusView.text = text
+    private fun askPin() {
+        val field = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = s.pinHint
+            setText(prefs.getString(PREF_PIN, InstaxPrinter.DEFAULT_PIN.toString()))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(s.pinTitle)
+            .setView(field)
+            .setNegativeButton(s.cancel, null)
+            .setPositiveButton(s.ok) { _, _ ->
+                val pin = field.text.toString().trim().toIntOrNull()
+                if (pin == null || pin !in 0..9999) message(s.badPin)
+                else prefs.edit().putString(PREF_PIN, pin.toString()).apply()
+            }
+            .show()
     }
 
-    private fun log(text: String) {
-        logView.text = text
+    // ---------------------------------------------------------------- Status
+
+    private fun onWatcherState(state: PrinterWatcher.State) {
+        connected = (state as? PrinterWatcher.State.Connected)?.info
+        statusSpinner.visibility = View.GONE
+        statusAction.visibility = View.GONE
+        when (state) {
+            PrinterWatcher.State.NoWifi -> {
+                statusDot.background = ui.rounded(Ui.WARN, 6)
+                statusTitle.text = s.noWifi
+                statusDetail.text = s.noWifiDetail
+                statusAction.text = s.guide
+                statusAction.setOnClickListener { show(guideView) }
+                statusAction.visibility = View.VISIBLE
+            }
+            PrinterWatcher.State.OtherWifi -> {
+                statusDot.background = ui.rounded(Ui.WARN, 6)
+                statusTitle.text = s.otherWifi
+                statusDetail.text = s.otherWifiDetail
+                statusAction.text = s.wifiSettings
+                statusAction.setOnClickListener { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }
+                statusAction.visibility = View.VISIBLE
+            }
+            PrinterWatcher.State.WaitingForPrinter -> {
+                statusDot.background = ui.rounded(Ui.WARN, 6)
+                statusTitle.text = s.waitingPrinter
+                statusDetail.text = s.waitingPrinterDetail
+                statusSpinner.visibility = View.VISIBLE
+            }
+            is PrinterWatcher.State.Connected -> {
+                val info = state.info
+                statusDot.background = ui.rounded(Ui.OK_GREEN, 6)
+                statusTitle.text = s.connected
+                val warnings = listOfNotNull(
+                    if (info.coverOpen) s.coverOpen else null,
+                    if (info.filmRemaining == 0) s.noFilm else null,
+                    if (info.batteryLevel == 0 && !info.charging) s.lowBattery else null,
+                )
+                statusDetail.text = s.connectedDetail.format(
+                    info.model, info.filmRemaining, info.batteryLevel, if (info.charging) s.charging else "",
+                ) + warnings.joinToString("") { "\n⚠️ $it" }
+            }
+        }
+        updateButtons()
+    }
+
+    private fun updateButtons() {
+        val busy = printing.get()
+        pickButton.isEnabled = !busy
+        editButton.isEnabled = !busy && photo != null
+        printButton.isEnabled = !busy && photo != null && connected != null
+        printButton.alpha = if (printButton.isEnabled) 1f else 0.45f
+    }
+
+    private fun message(text: String) {
+        messageView.text = text
         if (text.isNotBlank()) journal(text)
     }
 
-    /** Append a line to the journal from any thread. */
-    private fun journal(text: String) {
-        val line = "${timeFormat.format(Date())} $text"
-        val snapshot: String
-        synchronized(journalLock) {
-            journal.addLast(line)
-            while (journal.size > JOURNAL_LINES) journal.removeFirst()
-            snapshot = journal.joinToString("\n")
-        }
-        if (Looper.myLooper() == Looper.getMainLooper()) journalView.text = snapshot
-        else mainHandler.post { journalView.text = snapshot }
-    }
-
-    private fun journalText(): String = synchronized(journalLock) { journal.joinToString("\n") }
-
-    private fun copyJournal() {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("pls-share-sp3 log", journalText()))
-        logView.text = s.logCopied
-    }
-
-    private fun shareJournal() {
-        val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
-            .putExtra(Intent.EXTRA_SUBJECT, "pls-share-sp3 log")
-            .putExtra(Intent.EXTRA_TEXT, journalText())
-        startActivity(Intent.createChooser(intent, s.shareLog))
-    }
-
     private fun setBusy(busy: Boolean) {
-        for (b in listOf(connectButton, infoButton, currentWifiButton, pickButton, printButton)) b.isEnabled = !busy
-        fitSwitch.isEnabled = !busy
+        updateButtons()
         progressBar.visibility = if (busy) View.VISIBLE else View.INVISIBLE
         progressBar.isIndeterminate = busy
+        watcher.paused = busy
         if (busy) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
-    // ---------------------------------------------------------------- Printer network
+    // ---------------------------------------------------------------- Printer access
 
-    private fun connect() {
-        setStatus(s.connecting)
-        journal("requesting an INSTAX- network")
-        network.connect(object : PrinterNetwork.Listener {
-            override fun onConnected() {
-                journal("network available: ${network.network}")
-                setStatus(s.connected)
-                showInfo()
-            }
+    private fun host(): String = currentHost
 
-            override fun onFailed() {
-                journal("network request failed or timed out")
-                setStatus(s.connectFailed)
-            }
+    private fun pin(): Int = prefs.getString(PREF_PIN, null)?.toIntOrNull()?.takeIf { it in 0..9999 } ?: InstaxPrinter.DEFAULT_PIN
 
-            override fun onLost() {
-                journal("network lost")
-                setStatus(s.lost)
-            }
-        })
-    }
+    /** A quick, single-attempt client for the status watcher. */
+    private fun probePrinter() = InstaxPrinter(
+        host = host(), pin = pin(), timeoutMillis = 2_000, connectAttempts = 1,
+        socketFactory = network.socketFactory(), logger = if (debug) { m -> journal("probe: $m") } else null,
+    )
 
-    /** Use the Wi-Fi the user joined by hand (typically with a static IP) instead of requesting one. */
-    private fun useCurrentWifi() {
-        network.disconnect()
-        if (network.currentWifi() == null) {
-            journal("no Wi-Fi network active")
-            setStatus(s.noWifi)
-            return
-        }
-        journal("using the current Wi-Fi: ${network.describeBinding()}")
-        setStatus(s.usingCurrentWifi)
-        showInfo()
-    }
-
-    private fun fit(): Fit = if (fitSwitch.isChecked) Fit.CONTAIN else Fit.CROP
-
-    private fun printer(): InstaxPrinter? {
-        val pin = pinField.text.toString().trim().toIntOrNull()
-        if (pin == null || pin !in 0..9999) {
-            log(s.badPin)
-            return null
-        }
-        val host = hostField.text.toString().trim().ifEmpty { InstaxPrinter.DEFAULT_HOST }
-        prefs.edit().putString(PREF_PIN, pin.toString()).putString(PREF_HOST, host).apply()
-        journal("printer $host pin $pin, bound to ${network.describeBinding()}")
+    /** The patient client used for printing. */
+    private fun printPrinter(): InstaxPrinter {
+        journal("printer ${host()} pin ${pin()}, bound to ${network.describeBinding()}")
         return InstaxPrinter(
-            host = host, pin = pin, reachTimeoutMillis = REACH_TIMEOUT_MS,
+            host = host(), pin = pin(), reachTimeoutMillis = REACH_TIMEOUT_MS,
             socketFactory = network.socketFactory(), logger = { journal(it) },
         )
     }
 
-    private fun showInfo() {
-        val printer = printer() ?: return
-        if (!printing.compareAndSet(false, true)) return
-        setBusy(true)
-        log(s.locking)
-        Thread {
-            val result = runCatching {
-                printer.waitUntilReachable { attempt, e ->
-                    val reason = e.message?.let { m ->
-                        when {
-                            "ECONNREFUSED" in m -> "refused"
-                            "timed out" in m || e is java.net.SocketTimeoutException -> "no answer"
-                            else -> e.javaClass.simpleName
-                        }
-                    } ?: e.javaClass.simpleName
-                    mainHandler.post { logView.text = s.reaching.format(reason, attempt) }
-                }
+    /** Debug only: ask Android for the INSTAX network (DHCP), the way the first versions did. */
+    private fun requestNetwork() {
+        message(s.requesting)
+        journal("requesting an INSTAX- network")
+        network.connect(object : PrinterNetwork.Listener {
+            override fun onConnected() {
+                journal("network available: ${network.network}")
+                message("")
+                watcher.refresh()
             }
-            mainHandler.post {
-                printing.set(false)
-                setBusy(false)
-                result.onSuccess { log(""); showInfo(it) }.onFailure { showError(it) }
-            }
-        }.start()
-    }
 
-    private fun showInfo(info: PrinterInfo) {
-        infoView.text = s.infoLine.format(
-            info.model, info.firmware, info.batteryLevel, if (info.charging) s.charging else "",
-            info.filmRemaining, info.printCount,
-        ) + (if (info.coverOpen) s.coverOpen else "") +
-            (if (info.batteryLevel == 0 && !info.charging) "\n" + s.lowBattery else "")
-        infoView.visibility = View.VISIBLE
+            override fun onFailed() {
+                journal("network request failed or timed out")
+                message(s.requestFailed)
+            }
+
+            override fun onLost() {
+                journal("network lost")
+                watcher.refresh()
+            }
+        })
     }
 
     private fun showError(e: Throwable) {
         journal("error: $e")
-        log(
+        message(
             when (e) {
                 is PrinterException -> s.printerError.format(s.describeReturnCode(e.returnCode, e.message ?: ""))
                 is InstaxException -> s.printerError.format(e.message)
@@ -416,7 +484,7 @@ class MainActivity : Activity() {
         }
         if (uri != null) {
             loadPhoto(uri)
-            log(s.shared)
+            message(s.shared)
         }
     }
 
@@ -427,34 +495,137 @@ class MainActivity : Activity() {
                 result.onSuccess {
                     photo?.recycle()
                     photo = it
+                    editState.reset()
                     refreshPreview()
-                }.onFailure { log(s.photoError.format(it.message ?: it.javaClass.simpleName)) }
+                    updateButtons()
+                }.onFailure { message(s.photoError.format(it.message ?: it.javaClass.simpleName)) }
             }
         }.start()
     }
 
     private fun refreshPreview() {
         val bitmap = photo ?: return
-        previewView.setImageBitmap(Photos.prepare(bitmap, 800, 800, fit()))
+        previewImage.setImageBitmap(PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
+        previewHint.visibility = View.GONE
+    }
+
+    // ---------------------------------------------------------------- Editor screen
+
+    private fun buildEditor(): View {
+        val root = ui.column(16)
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.softButton(s.cancel) { show(homeView) }, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+            addView(ui.text(s.editorTitle, 17f, bold = true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            addView(ui.primaryButton(s.ok) { applyEdits() }.apply { minimumHeight = ui.dp(44); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f) }, LinearLayout.LayoutParams(ui.dp(80), ui.wrap))
+        }
+        root.addView(header)
+        ui.space(root, 12)
+
+        editorView = PhotoEditorView(this)
+        root.addView(editorView, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 8)
+        root.addView(ui.text(s.editorHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
+        ui.space(root, 12)
+
+        root.addView(ui.row(
+            ui.softButton(s.rotate) { editorView.update { rotation = (rotation + 90) % 360 } },
+            ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
+            ui.softButton(s.whole) { editorView.update { scale = PrintRenderer.containScale(editorView.bitmap!!, this); offsetX = 0f; offsetY = 0f } },
+            ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() },
+            ui.softButton(s.reset) { editorView.update { reset() }; syncSliders() },
+            gap = 6,
+        ))
+        ui.space(root, 16)
+
+        brightnessBar = slider(root, s.brightness) { v -> editorView.update { brightness = v - 100f } }
+        contrastBar = slider(root, s.contrast) { v -> editorView.update { contrast = v - 100f } }
+        saturationBar = slider(root, s.saturation) { v -> editorView.update { saturation = v / 100f } }
+
+        return ScrollView(this).apply { addView(root) }
+    }
+
+    private fun slider(parent: LinearLayout, label: String, onValue: (Int) -> Unit): SeekBar {
+        parent.addView(ui.text(label, 13f, alpha = 0.7f))
+        val bar = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    if (fromUser) onValue(progress)
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar) {}
+            })
+        }
+        parent.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(parent, 8)
+        return bar
+    }
+
+    private fun syncSliders() {
+        brightnessBar.progress = (editorView.state.brightness + 100f).toInt()
+        contrastBar.progress = (editorView.state.contrast + 100f).toInt()
+        saturationBar.progress = (editorView.state.saturation * 100f).toInt()
+    }
+
+    private fun openEditor() {
+        val bitmap = photo ?: return pickPhoto()
+        editorView.bitmap = bitmap
+        editorView.state.copyFrom(editState)
+        syncSliders()
+        show(editorScreen)
+    }
+
+    private fun applyEdits() {
+        editState.copyFrom(editorView.state)
+        refreshPreview()
+        show(homeView)
+    }
+
+    // ---------------------------------------------------------------- Guide screen
+
+    private fun buildGuide(): View {
+        val root = ui.column(20)
+        root.addView(ui.title(s.guideTitle))
+        ui.space(root, 12)
+        root.addView(ui.text(s.guideIntro, 15f))
+        ui.space(root, 16)
+        s.guideSteps.forEachIndexed { i, step ->
+            val number = ui.text("${i + 1}", 16f, bold = true, color = Ui.ACCENT)
+            val body = ui.text(step, 15f)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(number, LinearLayout.LayoutParams(ui.dp(28), ui.wrap))
+                addView(body, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            }
+            root.addView(ui.card(row, padding = 14))
+            ui.space(root, 8)
+        }
+        ui.space(root, 8)
+        root.addView(ui.text(s.guideNotes, 13f, alpha = 0.7f))
+        ui.space(root, 20)
+        root.addView(ui.primaryButton(s.wifiSettings) { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 8)
+        root.addView(ui.softButton(s.back) { show(homeView) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        return ScrollView(this).apply { addView(root) }
     }
 
     // ---------------------------------------------------------------- Printing
 
     private fun print() {
         val bitmap = photo
-        if (bitmap == null) {
-            log(s.noPhoto)
-            return
-        }
-        val printer = printer() ?: return
-        if (!printing.compareAndSet(false, true)) {
-            log(s.busy)
-            return
-        }
+        if (bitmap == null) return message(s.noPhoto)
+        if (connected == null) return message(s.notConnectedYet)
+        if (!printing.compareAndSet(false, true)) return message(s.busy)
         setBusy(true)
-        val source = Photos.source(bitmap, fit())
-        val transferOnly = transferOnlySwitch.isChecked
-        journal(if (transferOnly) "starting a transfer-only test (${fit()})" else "starting a print (${fit()})")
+        val printer = printPrinter()
+        val source = PrintRenderer.source(bitmap, editState)
+        val transferOnly = debug && transferOnlySwitch.isChecked
+        journal(if (transferOnly) "starting a transfer-only test" else "starting a print")
         Thread {
             val result = runCatching {
                 printer.print(source, transferOnly) { event -> mainHandler.post { onPrintEvent(event) } }
@@ -463,28 +634,60 @@ class MainActivity : Activity() {
                 printing.set(false)
                 setBusy(false)
                 result.onFailure { showError(it) }
+                watcher.refresh()
             }
         }.start()
     }
 
     private fun onPrintEvent(event: PrintEvent) {
         when (event) {
-            is PrintEvent.Reaching -> logView.text = s.reaching.format(event.reason, event.attempt)
-            PrintEvent.Locking -> log(s.locking)
-            is PrintEvent.Ready -> showInfo(event.info)
+            is PrintEvent.Reaching -> messageView.text = s.reaching.format(event.reason, event.attempt)
+            PrintEvent.Locking -> message(s.locking)
+            is PrintEvent.Ready -> {}
             is PrintEvent.Transferring -> {
                 progressBar.isIndeterminate = false
                 progressBar.progress = (1000L * event.sentBytes / event.totalBytes).toInt()
-                log("${s.sending} ${100L * event.sentBytes / event.totalBytes} %")
+                messageView.text = "${s.sending} ${100L * event.sentBytes / event.totalBytes} %"
             }
             PrintEvent.WaitingForPrinter -> {
                 progressBar.isIndeterminate = true
-                log(s.waiting)
+                message(s.waiting)
             }
-            is PrintEvent.Printing -> log(s.printing.format(event.estimatedSeconds.toInt()))
-            is PrintEvent.Finished -> log(s.done.format(event.filmRemaining))
-            PrintEvent.TransferOnlyFinished -> log(s.transferOnlyDone)
+            is PrintEvent.Printing -> message(s.printing.format(event.estimatedSeconds.toInt()))
+            is PrintEvent.Finished -> message(s.done.format(event.filmRemaining))
+            PrintEvent.TransferOnlyFinished -> message(s.transferOnlyDone)
             PrintEvent.Unlocked -> journal("unlocked")
         }
+    }
+
+    // ---------------------------------------------------------------- Journal
+
+    /** Append a line to the journal from any thread. */
+    private fun journal(text: String) {
+        val line = "${timeFormat.format(Date())} $text"
+        val snapshot: String
+        synchronized(journalLock) {
+            journal.addLast(line)
+            while (journal.size > JOURNAL_LINES) journal.removeFirst()
+            snapshot = if (debug) journal.joinToString("\n") else ""
+        }
+        if (!debug) return
+        if (Looper.myLooper() == Looper.getMainLooper()) journalView.text = snapshot
+        else mainHandler.post { journalView.text = snapshot }
+    }
+
+    private fun journalText(): String = synchronized(journalLock) { journal.joinToString("\n") }
+
+    private fun copyJournal() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("pls-share-sp3 log", journalText()))
+        message(s.logCopied)
+    }
+
+    private fun shareJournal() {
+        val intent = Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_SUBJECT, "pls-share-sp3 log")
+            .putExtra(Intent.EXTRA_TEXT, journalText())
+        startActivity(Intent.createChooser(intent, s.shareLog))
     }
 }

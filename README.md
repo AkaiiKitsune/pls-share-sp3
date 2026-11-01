@@ -39,27 +39,24 @@ Ou compiler soi-même : ouvrir le dossier dans Android Studio, ou `./gradlew :ap
 ### Utiliser
 
 1. Allumer l'imprimante (voyant Wi-Fi allumé).
-2. **1. Connecter l'imprimante** → choisir `INSTAX-XXXXXXXX` dans la fenêtre d'Android. L'appli affiche alors le modèle, le firmware, la batterie et le nombre de films restants.
-3. **2. Choisir une photo** (ou, depuis la galerie, *Partager → pls share SP-3*). L'aperçu montre exactement ce qui sortira : recadré au carré, ou photo entière avec bandes blanches (interrupteur).
-4. **3. Imprimer**. Barre de progression pendant l'envoi (1,9 Mo, environ 25 s), puis attente de la fin du tirage (~15 s). L'appli verrouille l'imprimante pendant l'impression et la libère ensuite.
+2. La première fois, suivre le **guide de connexion** (bouton sur l'écran d'accueil ou menu ⋮) : il explique comment enregistrer le Wi-Fi `INSTAX-XXXXXXXX` avec une adresse IP fixe dans les réglages Android. Ça ne se fait qu'une fois.
+3. Rejoindre le Wi-Fi de l'imprimante. L'appli détecte toute seule qu'elle est joignable et affiche **Connectée** avec le modèle, le nombre de films et la batterie. Après l'allumage, l'imprimante met 1 à 2 minutes à répondre : l'appli attend.
+4. **Choisir une photo** (ou, depuis la galerie, *Partager → pls share SP-3*), puis **Modifier** pour cadrer : zoom au pincement, déplacement au doigt, rotation, photo entière ou remplissage, luminosité, contraste, saturation, noir et blanc. L'aperçu montre exactement ce qui sortira.
+5. **Imprimer**. Barre de progression pendant l'envoi (1,9 Mo, environ 25 s), puis attente de la fin du tirage (~15 s).
 
-L'interrupteur **mode test** envoie l'image sans lancer le tirage (aucun film consommé), pratique pour vérifier la connexion. Le **journal** en bas de l'écran garde chaque étape et chaque trame échangée, avec « Copier » et « Partager » pour signaler un problème.
+Le PIN de l'imprimante (1111 par défaut) se change dans le menu ⋮. Le bord épais du tirage est le **bas** de l'image.
 
-Si vous avez changé le PIN de l'imprimante (1111 par défaut), modifiez-le en bas de l'écran.
+### Pourquoi une adresse IP fixe
 
-### Si l'imprimante plante pendant l'attribution de l'adresse IP
+Sur certains téléphones récents (constaté avec un Pixel 7 Pro), la SP-3 se met en erreur et s'éteint pendant l'échange DHCP, que ce soit via une appli ou via les réglages Wi-Fi d'Android. Une adresse fixe supprime cet échange. L'imprimante est toujours à `192.168.0.251`, même si sa plage DHCP change à chaque redémarrage. Les réglages : **Paramètres IP = Statique**, IP `192.168.0.5`, préfixe `24`, passerelle `192.168.0.251`, DNS `192.168.0.251`, Confidentialité = **MAC de l'appareil**, puis « rester connecté » malgré l'absence d'Internet. Android n'autorise une IP fixe que sur un réseau enregistré par l'utilisateur, pas sur un réseau demandé par une appli, d'où ce passage par les réglages.
 
-Sur certains téléphones récents (constaté avec un Pixel 7 Pro), la SP-3 se met en erreur et s'éteint pendant l'échange DHCP, que ce soit via l'appli ou via les réglages Wi-Fi d'Android. Contournement : **supprimer le DHCP** avec une adresse fixe. L'imprimante est toujours à `192.168.0.251`, même si sa plage DHCP change à chaque redémarrage.
+### Mode debug
 
-1. Réglages Android → Wi-Fi → `INSTAX-XXXXXXXX` → Options avancées : **Paramètres IP = Statique**, IP `192.168.0.5`, préfixe `24`, passerelle `192.168.0.251`, DNS `192.168.0.251`. Confidentialité : **MAC de l'appareil**.
-2. Rejoindre ce réseau, accepter « rester connecté » malgré l'absence d'Internet.
-3. Dans l'appli, appuyer sur **Wi-Fi actuel (IP fixe)** au lieu de « Connecter » : l'appli lie ses connexions au Wi-Fi en cours. Android n'autorise pas une appli à imposer une IP fixe sur un réseau qu'elle demande elle-même, d'où ce détour par les réglages.
-
-Le bord épais du tirage est le **bas** de l'image.
+Dans le menu ⋮, **Mode debug** affiche : l'adresse de l'imprimante, un **mode test** qui envoie l'image sans lancer le tirage (aucun film consommé), la demande de réseau INSTAX via l'appli (DHCP, instable sur certains téléphones), et le **journal** de chaque étape et chaque trame échangée, avec « Copier » et « Partager » pour signaler un problème.
 
 ### Ce que l'appli ne fait pas (encore)
 
-- Pas de filtres, de cadres ni de collage. Une photo, un tirage.
+- Pas de cadres ni de collage. Une photo, un tirage.
 - SP-1 non supportée (format JPEG propriétaire, différent).
 - iOS : impossible avec cette approche (pas de sockets TCP bruts liés à un réseau depuis une appli tierce sans NetworkExtension). Sur iPhone, utilisez un ordinateur avec `instax-print`.
 
@@ -120,10 +117,13 @@ core/src/main/kotlin/instax/
   DesktopImages.kt  redimensionnement java.awt pour la CLI
   cli/Main.kt       instax-print
 app/src/main/kotlin/io/github/akaiikitsune/plsshare/
-  MainActivity.kt   l'écran unique
-  PrinterNetwork.kt WifiNetworkSpecifier + sockets liés au réseau
-  Photos.kt         chargement EXIF-correct, recadrage, pixels
-  Strings.kt        textes FR/EN
+  MainActivity.kt    accueil, éditeur, guide, menu, impression
+  PrinterWatcher.kt  détection automatique de l'imprimante sur le Wi-Fi courant
+  PrinterNetwork.kt  sockets liés au Wi-Fi courant (ou demandé en debug)
+  PhotoEditorView.kt zoom / déplacement au doigt
+  Photos.kt          chargement EXIF-correct, rendu du tirage (cadrage, couleurs)
+  Ui.kt              widgets et styles
+  Strings.kt         textes FR/EN
 ```
 
 ## Crédits

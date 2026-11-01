@@ -11,63 +11,101 @@ class Strings private constructor(private val fr: Boolean) {
     private fun t(french: String, english: String) = if (fr) french else english
 
     val title get() = "pls share SP-3"
-    val subtitle get() = t("Impression Instax SHARE SP-2 / SP-3 sans l'appli officielle", "Print to an Instax SHARE SP-2 / SP-3 without the official app")
-    val connect get() = t("1. Connecter l'imprimante", "1. Connect the printer")
-    val connecting get() = t("Connexion au Wi-Fi INSTAX-… Choisissez l'imprimante dans la fenêtre système.", "Joining the INSTAX-… Wi-Fi. Pick the printer in the system dialog.")
-    val connected get() = t("Connecté au Wi-Fi de l'imprimante.", "Connected to the printer's Wi-Fi.")
-    val connectFailed get() = t("Pas de réseau INSTAX trouvé. Allumez l'imprimante (voyant Wi-Fi) et réessayez.", "No INSTAX network found. Switch the printer on (Wi-Fi light) and try again.")
-    val lost get() = t("Connexion à l'imprimante perdue.", "Lost the connection to the printer.")
-    val notConnected get() = t("Non connecté. Si vous avez déjà rejoint le Wi-Fi INSTAX- à la main, l'appli l'utilisera.", "Not connected. If you already joined the INSTAX- Wi-Fi by hand, the app will use it.")
-    val pickPhoto get() = t("2. Choisir une photo", "2. Pick a photo")
-    val print get() = t("3. Imprimer", "3. Print")
-    val info get() = t("Infos imprimante", "Printer info")
-    val useCurrentWifi get() = t("Wi-Fi actuel (IP fixe)", "Current Wi-Fi (static IP)")
-    val usingCurrentWifi get() = t("Utilisation du Wi-Fi rejoint à la main.", "Using the Wi-Fi you joined by hand.")
-    val noWifi get() = t("Aucun Wi-Fi actif. Rejoignez INSTAX-… dans les réglages Android, puis revenez ici.", "No Wi-Fi active. Join INSTAX-… in the Android settings, then come back here.")
-    val openWifiSettings get() = t("Ouvrir les réglages Wi-Fi", "Open Wi-Fi settings")
-    val staticHint get() = t(
-        "Si l'imprimante plante pendant l'attribution de l'adresse IP, contournez le DHCP : dans les réglages Wi-Fi d'Android, " +
-            "enregistrez INSTAX-XXXXXXXX avec Paramètres IP = Statique, IP 192.168.0.5, préfixe 24, passerelle 192.168.0.251, DNS 192.168.0.251, " +
-            "et Confidentialité = MAC de l'appareil. Rejoignez ce réseau (acceptez « rester connecté » sans Internet), puis appuyez sur « Wi-Fi actuel » ici.",
-        "If the printer crashes while assigning the IP address, skip DHCP: in the Android Wi-Fi settings, save INSTAX-XXXXXXXX with " +
-            "IP settings = Static, IP 192.168.0.5, prefix 24, gateway 192.168.0.251, DNS 192.168.0.251, and Privacy = device MAC. " +
-            "Join that network (accept staying connected without internet), then tap “Current Wi-Fi” here.",
-    )
-    val fitCrop get() = t("Recadrer pour remplir", "Crop to fill")
-    val fitContain get() = t("Photo entière (bandes blanches)", "Whole photo (white bars)")
-    val pin get() = t("PIN de l'imprimante (1111 par défaut)", "Printer PIN (default 1111)")
-    val host get() = t("Adresse de l'imprimante", "Printer address")
-    val noPhoto get() = t("Choisissez d'abord une photo.", "Pick a photo first.")
-    val badPin get() = t("Le PIN doit avoir 4 chiffres.", "The PIN must be 4 digits.")
+
+    // Connection status
+    val noWifi get() = t("Pas de Wi-Fi", "No Wi-Fi")
+    val noWifiDetail get() = t("Rejoignez le réseau de l'imprimante. Le guide explique comment.", "Join the printer's network. The guide shows how.")
+    val otherWifi get() = t("Pas sur le Wi-Fi de l'imprimante", "Not on the printer's Wi-Fi")
+    val otherWifiDetail get() = t("Le Wi-Fi actuel n'est pas INSTAX-… Rejoignez-le dans les réglages.", "The current Wi-Fi is not INSTAX-… Join it in the settings.")
+    val waitingPrinter get() = t("Imprimante en préparation…", "Printer getting ready…")
+    val waitingPrinterDetail get() = t("Réseau INSTAX actif. L'imprimante met 1 à 2 minutes à répondre après l'allumage.", "INSTAX network active. The printer needs 1 to 2 minutes to answer after switching on.")
+    val connected get() = t("Connectée", "Connected")
+    val connectedDetail get() = t("%s · %d films · batterie %d/3%s", "%s · %d sheets · battery %d/3%s")
+    val charging get() = t(" (en charge)", " (charging)")
+    val coverOpen get() = t("Capot du film ouvert", "Film cover open")
+    val noFilm get() = t("Plus de film", "Out of film")
+    val lowBattery get() = t("Batterie faible, branchez l'imprimante", "Battery low, plug the printer in")
+    val guide get() = t("Guide de connexion", "Connection guide")
+    val wifiSettings get() = t("Réglages Wi-Fi", "Wi-Fi settings")
+
+    // Home
+    val pickPhoto get() = t("Choisir une photo", "Choose a photo")
+    val edit get() = t("Modifier", "Edit")
+    val print get() = t("Imprimer", "Print")
+    val tapToPick get() = t("Touchez pour choisir une photo", "Tap to choose a photo")
+    val noPhoto get() = t("Choisissez d'abord une photo.", "Choose a photo first.")
+    val notConnectedYet get() = t("L'imprimante n'est pas connectée.", "The printer is not connected.")
     val busy get() = t("Impression en cours, patientez.", "A print is running, please wait.")
-    val reaching get() = t("L'imprimante ne répond pas encore (%s), nouvel essai %d… Elle met 1 à 2 min après la connexion Wi-Fi.", "The printer is not answering yet (%s), attempt %d… It needs 1 to 2 min after joining the Wi-Fi.")
+    val shared get() = t("Photo reçue.", "Photo received.")
+    val photoError get() = t("Impossible de lire cette photo : %s", "Could not read this photo: %s")
+
+    // Print progress
+    val reaching get() = t("L'imprimante ne répond pas encore (%s), essai %d…", "The printer is not answering yet (%s), attempt %d…")
     val locking get() = t("Connexion à l'imprimante…", "Contacting the printer…")
     val sending get() = t("Envoi de la photo", "Sending the photo")
     val waiting get() = t("L'imprimante prépare le tirage…", "The printer is getting ready…")
     val printing get() = t("Impression, environ %d s…", "Printing, about %d s…")
-    val done get() = t("Tirage terminé ! Il reste %d photos.", "Print finished! %d sheets left.")
-    val cancelled get() = t("Annulé.", "Cancelled.")
-    val networkError get() = t("Impossible de joindre l'imprimante (%s). Êtes-vous sur le Wi-Fi INSTAX-… ?", "Could not reach the printer (%s). Are you on the INSTAX-… Wi-Fi?")
-    val refused get() = t("L'imprimante est sur le Wi-Fi mais refuse les connexions (%s). Chargez du film, éteignez-la, rallumez-la, puis « Connecter ».", "The printer is on the Wi-Fi but refuses connections (%s). Load film, switch it off and on, then tap Connect.")
+    val done get() = t("Tirage terminé ! Il reste %d films.", "Print finished! %d sheets left.")
+    val transferOnlyDone get() = t("Test terminé : image reçue par l'imprimante, rien d'imprimé.", "Test finished: the printer received the image, nothing printed.")
+    val networkError get() = t("Impossible de joindre l'imprimante (%s).", "Could not reach the printer (%s).")
+    val refused get() = t("L'imprimante refuse les connexions (%s). Attendez une minute, ou éteignez-la et rallumez-la.", "The printer refuses connections (%s). Wait a minute, or switch it off and on.")
     val printerError get() = t("L'imprimante a répondu : %s", "The printer answered: %s")
-    val photoError get() = t("Impossible de lire cette photo : %s", "Could not read this photo: %s")
-    val infoLine get() = t("%s · firmware %s · batterie %d/3%s · %d photos restantes · %d tirages au total", "%s · firmware %s · battery %d/3%s · %d sheets left · %d prints in total")
-    val charging get() = t(" (en charge)", " (charging)")
-    val coverOpen get() = t(" · capot ouvert !", " · cover open!")
-    val transferOnly get() = t("Mode test : envoyer l'image sans imprimer (n'utilise pas de film)", "Test mode: send the image without printing (uses no film)")
-    val transferOnlyDone get() = t("Test terminé : l'image est arrivée dans l'imprimante, rien n'a été imprimé.", "Test finished: the image reached the printer, nothing was printed.")
-    val lowBattery get() = t("⚠️ Batterie de l'imprimante faible : branchez-la avant d'imprimer.", "⚠️ Printer battery low: plug it in before printing.")
-    val journal get() = t("Journal", "Log")
-    val copyLog get() = t("Copier le journal", "Copy log")
-    val shareLog get() = t("Partager le journal", "Share log")
-    val logCopied get() = t("Journal copié.", "Log copied.")
-    val shared get() = t("Photo reçue. Connectez l'imprimante puis appuyez sur Imprimer.", "Photo received. Connect the printer and tap Print.")
-    val hint get() = t(
-        "Allumez l'imprimante, appuyez sur « Connecter », puis choisissez le réseau INSTAX-XXXXXXXX dans la fenêtre d'Android. " +
-            "L'appli garde ce réseau pour elle : pas besoin de couper les données mobiles ni de bricoler le Wi-Fi.",
-        "Switch the printer on, tap “Connect”, then choose the INSTAX-XXXXXXXX network in the Android dialog. " +
-            "The app keeps that network for itself: no need to turn mobile data off or fiddle with Wi-Fi settings.",
+
+    // Editor
+    val editorTitle get() = t("Cadrage et couleurs", "Framing and colours")
+    val cancel get() = t("Annuler", "Cancel")
+    val ok get() = "OK"
+    val rotate get() = t("Tourner", "Rotate")
+    val fill get() = t("Remplir", "Fill")
+    val whole get() = t("Entière", "Whole")
+    val blackWhite get() = t("N&B", "B&W")
+    val reset get() = t("Réinit.", "Reset")
+    val brightness get() = t("Luminosité", "Brightness")
+    val contrast get() = t("Contraste", "Contrast")
+    val saturation get() = t("Saturation", "Saturation")
+    val editorHint get() = t("Pincez pour zoomer, glissez pour déplacer. Le bord épais du tirage est en bas.", "Pinch to zoom, drag to move. The thick edge of the print is at the bottom.")
+
+    // Menu
+    val menuGuide get() = t("Guide de connexion", "Connection guide")
+    val menuPin get() = t("PIN de l'imprimante…", "Printer PIN…")
+    val menuDebug get() = t("Mode debug", "Debug mode")
+    val pinTitle get() = t("PIN de l'imprimante", "Printer PIN")
+    val pinHint get() = t("4 chiffres, 1111 par défaut", "4 digits, default 1111")
+    val badPin get() = t("Le PIN doit être un nombre de 0 à 9999.", "The PIN must be a number from 0 to 9999.")
+
+    // Guide
+    val guideTitle get() = t("Connecter l'imprimante", "Connect the printer")
+    val guideIntro get() = t(
+        "La SP-3 crée son propre Wi-Fi « INSTAX-XXXXXXXX ». Sur les téléphones récents elle peut planter pendant l'attribution automatique " +
+            "d'adresse (DHCP) : on lui donne donc une adresse fixe, une seule fois. Ensuite il suffit de rejoindre ce Wi-Fi.",
+        "The SP-3 creates its own “INSTAX-XXXXXXXX” Wi-Fi. On recent phones it can crash during automatic address assignment (DHCP), " +
+            "so we give it a fixed address, once. After that, just join that Wi-Fi.",
     )
+    val guideSteps get() = listOf(
+        t("Allumez l'imprimante et attendez que son voyant Wi-Fi soit allumé.", "Switch the printer on and wait for its Wi-Fi light."),
+        t("Ouvrez les réglages Wi-Fi d'Android et touchez le réseau INSTAX-XXXXXXXX (ouvert, sans mot de passe).", "Open the Android Wi-Fi settings and tap the INSTAX-XXXXXXXX network (open, no password)."),
+        t("Avant de vous connecter, ouvrez « Options avancées » et réglez : Paramètres IP = Statique · Adresse IP 192.168.0.5 · Passerelle 192.168.0.251 · Longueur du préfixe 24 · DNS 1 192.168.0.251.", "Before connecting, open “Advanced options” and set: IP settings = Static · IP address 192.168.0.5 · Gateway 192.168.0.251 · Prefix length 24 · DNS 1 192.168.0.251."),
+        t("Dans « Confidentialité », choisissez « Utiliser l'adresse MAC de l'appareil ».", "Under “Privacy”, choose “Use device MAC”."),
+        t("Connectez-vous. Si Android prévient que ce réseau n'a pas d'accès Internet, choisissez « Rester connecté » (et « Ne plus demander »).", "Connect. If Android warns the network has no internet, choose “Stay connected” (and “Don't ask again”)."),
+        t("Revenez dans l'appli : le statut passe à « Connectée » tout seul. L'imprimante peut mettre 1 à 2 minutes à répondre après l'allumage.", "Come back to the app: the status turns to “Connected” by itself. The printer can take 1 to 2 minutes to answer after switching on."),
+    )
+    val guideNotes get() = t(
+        "Les données mobiles peuvent rester activées. Le réglage ne se fait qu'une fois : les fois suivantes, allumez l'imprimante, rejoignez son Wi-Fi, imprimez.",
+        "Mobile data can stay on. The setup is done once: next time, switch the printer on, join its Wi-Fi, print.",
+    )
+    val back get() = t("Retour", "Back")
+
+    // Debug
+    val debugTitle get() = "Debug"
+    val host get() = t("Adresse de l'imprimante", "Printer address")
+    val transferOnly get() = t("Mode test : envoyer l'image sans imprimer (n'utilise pas de film)", "Test mode: send the image without printing (uses no film)")
+    val requestNetwork get() = t("Demander le réseau INSTAX via l'appli (DHCP, expérimental)", "Request the INSTAX network through the app (DHCP, experimental)")
+    val requesting get() = t("Demande du réseau INSTAX… choisissez l'imprimante dans la fenêtre Android.", "Requesting the INSTAX network… pick the printer in the Android dialog.")
+    val requestFailed get() = t("Demande de réseau échouée ou expirée.", "Network request failed or timed out.")
+    val journal get() = t("Journal", "Log")
+    val copyLog get() = t("Copier", "Copy")
+    val shareLog get() = t("Partager", "Share")
+    val logCopied get() = t("Journal copié.", "Log copied.")
 
     fun describeReturnCode(code: Int, fallback: String): String = if (!fr) fallback else when (code) {
         0x7F -> "imprimante occupée"

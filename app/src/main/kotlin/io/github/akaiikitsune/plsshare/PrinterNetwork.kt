@@ -9,6 +9,7 @@ import android.net.wifi.WifiNetworkSpecifier
 import android.os.Handler
 import android.os.Looper
 import android.os.PatternMatcher
+import instax.InstaxPrinter
 import javax.net.SocketFactory
 
 /**
@@ -97,6 +98,23 @@ class PrinterNetwork(context: Context) {
     fun socketFactory(): SocketFactory {
         val bound = network ?: currentWifi()
         return bound?.socketFactory ?: SocketFactory.getDefault()
+    }
+
+    /**
+     * Whether the current Wi-Fi looks like the printer's. Reading the SSID would need the location
+     * permission, so this looks at the link instead: either the phone sits on the printer's subnet
+     * (static IP setup), or the Wi-Fi has no validated internet access, which the INSTAX network never has.
+     */
+    fun isPrinterNetwork(host: String = InstaxPrinter.DEFAULT_HOST): Boolean {
+        val wifi = network ?: currentWifi() ?: return false
+        if (network != null) return true
+        val capabilities = connectivity.getNetworkCapabilities(wifi)
+        if (capabilities != null && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return true
+        val link = connectivity.getLinkProperties(wifi) ?: return false
+        val subnet = host.substringBeforeLast('.')
+        return link.linkAddresses.any { la ->
+            la.address is java.net.Inet4Address && la.address.hostAddress?.substringBeforeLast('.') == subnet
+        }
     }
 
     /** The Wi-Fi network the phone is on right now, requested by the app or joined by hand. */
