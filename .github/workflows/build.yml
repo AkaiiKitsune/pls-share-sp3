@@ -43,6 +43,14 @@ jobs:
         run: ./gradlew :app:assembleDebug --no-daemon
       - name: Rename the APK
         run: cp app/build/outputs/apk/debug/app-debug.apk pls-share-sp3-debug.apk
+      - name: Verify the APK (signature, manifest)
+        run: |
+          TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          echo "build-tools: $TOOLS"
+          "$TOOLS/apksigner" verify --verbose --print-certs pls-share-sp3-debug.apk
+          "$TOOLS/aapt2" dump badging pls-share-sp3-debug.apk | head -20
+          unzip -l pls-share-sp3-debug.apk
+          sha256sum pls-share-sp3-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: pls-share-sp3-apk
