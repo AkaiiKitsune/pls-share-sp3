@@ -154,6 +154,7 @@ class Strings private constructor(private val fr: Boolean) {
     val menuGuide get() = t("Guide de connexion", "Connection guide")
     val menuPin get() = t("PIN de l'imprimante…", "Printer PIN…")
     val menuDebug get() = t("Mode debug", "Debug mode")
+    val menuQueue get() = t("File d'impression", "Print queue")
     val pinTitle get() = t("PIN de l'imprimante", "Printer PIN")
     val pinHint get() = t("4 chiffres, 1111 par défaut", "4 digits, default 1111")
     val badPin get() = t("Le PIN doit être un nombre de 0 à 9999.", "The PIN must be a number from 0 to 9999.")

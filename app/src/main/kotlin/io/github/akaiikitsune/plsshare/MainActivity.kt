@@ -67,6 +67,8 @@ class MainActivity : Activity() {
         private const val PREF_HOST = "host"
         private const val PREF_DEBUG = "debug"
         private const val PREF_FILM = "filmPreview"
+        private const val PREF_QUEUE = "queue"
+        private const val MENU_QUEUE = 7
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
 
@@ -103,6 +105,8 @@ class MainActivity : Activity() {
     private lateinit var queueEmptyText: TextView
     private lateinit var printQueueButton: Button
     private lateinit var queueButton: Button
+    private lateinit var queueCard: View
+    private var queueEnabled = false
 
     // Home widgets
     private lateinit var statusDot: View
@@ -183,6 +187,7 @@ class MainActivity : Activity() {
         network = PrinterNetwork(this)
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         debug = prefs.getBoolean(PREF_DEBUG, false)
+        queueEnabled = prefs.getBoolean(PREF_QUEUE, false)
 
         container = FrameLayout(this)
         // Android 15 draws apps edge to edge: keep the content clear of the status bar, the
@@ -332,7 +337,7 @@ class MainActivity : Activity() {
         queueRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         queueEmptyText = ui.text(s.queueEmpty, 13f, alpha = 0.6f)
         printQueueButton = ui.softButton(s.printQueue.format(0)) { printQueue() }
-        val queueCard = ui.card(
+        queueCard = ui.card(
             ui.text(s.queueTitle, 16f, bold = true),
             queueEmptyText,
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(queueRow) },
@@ -385,6 +390,11 @@ class MainActivity : Activity() {
     private fun applyDebugVisibility() {
         debugCard.visibility = if (debug) View.VISIBLE else View.GONE
         if (debug) journalView.text = journalText()
+        // The queue is an occasional tool: hidden unless enabled in the menu, but it shows up by
+        // itself while something is waiting so queued photos are never forgotten.
+        val hasJobs = Jobs.list(Jobs.queueDir(this)).isNotEmpty()
+        queueCard.visibility = if (queueEnabled || hasJobs) View.VISIBLE else View.GONE
+        queueButton.visibility = if (queueEnabled) View.VISIBLE else View.GONE
     }
 
     private fun showMenu(anchor: View) {
@@ -394,7 +404,8 @@ class MainActivity : Activity() {
         menu.menu.add(0, MENU_HISTORY, 2, s.menuHistory)
         menu.menu.add(0, MENU_EXPORT, 3, s.menuExport)
         menu.menu.add(0, MENU_UPDATE, 4, s.menuUpdate)
-        menu.menu.add(0, MENU_DEBUG, 5, s.menuDebug).apply { isCheckable = true; isChecked = debug }
+        menu.menu.add(0, MENU_QUEUE, 5, s.menuQueue).apply { isCheckable = true; isChecked = queueEnabled }
+        menu.menu.add(0, MENU_DEBUG, 6, s.menuDebug).apply { isCheckable = true; isChecked = debug }
         menu.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 MENU_GUIDE -> show(guideView)
@@ -405,6 +416,11 @@ class MainActivity : Activity() {
                 MENU_DEBUG -> {
                     debug = !debug
                     prefs.edit().putBoolean(PREF_DEBUG, debug).apply()
+                    applyDebugVisibility()
+                }
+                MENU_QUEUE -> {
+                    queueEnabled = !queueEnabled
+                    prefs.edit().putBoolean(PREF_QUEUE, queueEnabled).apply()
                     applyDebugVisibility()
                 }
             }
@@ -643,6 +659,7 @@ class MainActivity : Activity() {
         }
         printQueueButton.text = s.printQueue.format(files.size)
         updateButtons()
+        queueCard.visibility = if (queueEnabled || files.isNotEmpty()) View.VISIBLE else View.GONE
     }
 
     private fun clearQueue() {
