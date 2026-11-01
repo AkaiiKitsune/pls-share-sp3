@@ -41,12 +41,28 @@ Ou compiler soi-même : ouvrir le dossier dans Android Studio, ou `./gradlew :ap
 1. Allumer l'imprimante (voyant Wi-Fi allumé).
 2. La première fois, suivre le **guide de connexion** (bouton sur l'écran d'accueil ou menu ⋮) : il explique comment enregistrer le Wi-Fi `INSTAX-XXXXXXXX` avec une adresse IP fixe dans les réglages Android. Ça ne se fait qu'une fois.
 3. Rejoindre le Wi-Fi de l'imprimante. L'appli détecte toute seule qu'elle est joignable et affiche **Connectée** avec le modèle, le nombre de films et la batterie. Après l'allumage, l'imprimante met 1 à 2 minutes à répondre : l'appli attend.
-4. **Choisir une photo** (ou, depuis la galerie, *Partager → pls share SP-3*), puis **Modifier** pour cadrer : zoom au pincement, déplacement au doigt, rotation, photo entière ou remplissage, luminosité, contraste, saturation, noir et blanc. L'aperçu montre exactement ce qui sortira.
+4. **Choisir une photo** (ou, depuis la galerie, *Partager → pls share SP-3*), puis **Modifier** (voir *L'éditeur* ci-dessous). L'accueil montre le tirage dans son cadre instax, et l'aperçu correspond exactement à ce qui sortira.
 5. **Imprimer**. L'impression tourne dans un service en arrière-plan avec une notification de progression : on peut quitter l'appli pendant l'envoi (1,9 Mo, environ 25 s) et le tirage (~15 s).
 
 **File d'impression** : « Ajouter à la file » met la photo en cours en attente, « Ajouter plusieurs… » choisit jusqu'à dix photos et leur applique le réglage courant, puis « Imprimer la file » enchaîne les tirages (arrêt automatique quand il n'y a plus de film). **Historique** (menu ⋮) : chaque tirage est conservé avec sa date, pour le réimprimer, le partager ou le supprimer. **Exporter / partager** (menu ⋮) enregistre l'image rendue (800 × 800) dans Photos › pls share SP-3 et ouvre le partage.
 
 Le PIN de l'imprimante (1111 par défaut) se change dans le menu ⋮. Le bord épais du tirage est le **bas** de l'image.
+
+### L'éditeur
+
+Photo fixe en haut, réglages qui défilent dessous, deux onglets.
+
+**Réglages** : Original (maintenir) et Aperçu film ; Histogramme RVB et Zones écrêtées (hachures clignotantes, rouge = brûlé, bleu = bouché) ; Tourner, Remplir, Entière, N&B, Réinitialiser ; zoom au pincement, rotation continue à deux doigts, déplacement au doigt avec bords, centre et angles droits aimantés ; dix filtres (Original, Vif, Chaud, Froid, Délavé, Rétro, Sépia, Mono, Noir, Pop) ; **Mes presets** (enregistrer / appliquer / supprimer un réglage complet) ; **Auto** (niveaux automatiques) ; Lumière (exposition, contraste, hautes lumières, ombres, blancs, noirs), Couleur (température, teinte, saturation), Détails (netteté, vignettage), Cadre (bordure, bandeau en bas façon Polaroid, coins arrondis, couleur). Un tap sur le nom d'un curseur le remet à zéro ; un appui long sur un outil explique ce qu'il fait.
+
+**Textes** : légende, date, heure ou date et heure (date EXIF de la photo si disponible), déplaçables au doigt et redimensionnables au pincement, sept polices système, grille de positions avec marge réglable, taille en pixels du tirage, texte clair ou sombre, style ombre / contour / bulle.
+
+### Aperçu film, calibration et compensation
+
+L'interrupteur **Aperçu film** (accueil et éditeur) montre le tirage tel que le film devrait le rendre, à l'écran seulement. C'est un **modèle paramétrique** (`Film.kt`) : exposition, contraste des demi-tons, seuils de noir et de blanc (latitude), saturation, dominante bleu/jaune et vert/magenta, assombrissement des bleus saturés. Les valeurs de départ viennent d'observations publiées, faute de données constructeur : tirages plus sombres que l'écran ([forum fujix, SP-3 en impression directe](https://www.fujix-forum.com/threads/instax-sp-3-square-prints-darker-than-lcd-preview-on-x-t1.89523/) ; Fujifilm prévient que le tirage « peut différer de l'écran »), latitude d'environ +1 / −2 IL avec détail ([mesures sur photrio](https://www.photrio.com/forum/threads/pre-exposure-to-increase-the-dynamic-range-of-instax-film.202122/)), plus de contraste et de saturation que l'écran ([photographyblog, test SP-3](https://www.photographyblog.com/reviews/fujifilm_instax_share_sp_3_review)), bleus saturés nettement plus sombres et couleurs chaudes légèrement verdies ([Emulsive, film instax couleur + SP-2](https://emulsive.org/reviews/investigating-fuji-instax-mini-monochrome-color-and-the-fuji-sp-2-printer)), gris légèrement bleutés d'après le profilage ICC de la SP-2 ([Dom Varney](https://domvarney.com/2017/01/13/instax-colour-tweek/), qui décale la balance de 7 crans vers le jaune) alors qu'Emulsive les trouve neutres.
+
+Chaque imprimante et chaque lot de film diffèrent : menu ⋮ → **Calibrer l'aperçu film** affiche une **mire** (gris par paliers, 16 patches dont des teintes chair, dégradé continu) à imprimer une fois, puis des curseurs pour ajuster le modèle jusqu'à ce que la mire simulée à l'écran ressemble au tirage, à la lumière du jour. Les valeurs sont mémorisées.
+
+Menu ⋮ → **Compenser le tirage** applique l'**inverse du modèle** aux données envoyées à l'imprimante (plus clair, moins contrasté, dominante corrigée, bleus relevés) pour que le tirage ressemble à l'écran. Ce que le film ne peut pas rendre (extrêmes écrêtés, bleus très saturés) reste hors de portée ; l'aperçu film montre alors ce qui restera perdu. La mire s'imprime toujours sans compensation.
 
 ### Pourquoi une adresse IP fixe
 
