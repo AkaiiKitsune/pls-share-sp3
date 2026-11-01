@@ -24,11 +24,40 @@ class Overlay(
     var size: Float = 0.045f,
     var dark: Boolean = false,
     var style: Style = Style.SHADOW,
+    var font: Font = Font.BOLD,
 ) {
     enum class Kind { TEXT, DATE, TIME, DATETIME }
     enum class Style { SHADOW, OUTLINE, PILL }
 
-    fun copy() = Overlay(kind, text, x, y, size, dark, style)
+    /** System font families, so no font file ships with the app. Missing families fall back to sans-serif. */
+    enum class Font(val family: String, val typefaceStyle: Int) {
+        BOLD("sans-serif", android.graphics.Typeface.BOLD),
+        LIGHT("sans-serif-light", android.graphics.Typeface.NORMAL),
+        CONDENSED("sans-serif-condensed", android.graphics.Typeface.BOLD),
+        SERIF("serif", android.graphics.Typeface.NORMAL),
+        MONO("monospace", android.graphics.Typeface.NORMAL),
+        CURSIVE("cursive", android.graphics.Typeface.NORMAL),
+        CASUAL("casual", android.graphics.Typeface.NORMAL);
+
+        val typeface: android.graphics.Typeface by lazy { android.graphics.Typeface.create(family, typefaceStyle) }
+    }
+
+    /** Anchor positions for the quick placement grid: -1 = left/top edge, 0 = centre, 1 = right/bottom edge. */
+    enum class Anchor(val h: Int, val v: Int) {
+        TOP_LEFT(-1, -1), TOP(0, -1), TOP_RIGHT(1, -1),
+        LEFT(-1, 0), CENTER(0, 0), RIGHT(1, 0),
+        BOTTOM_LEFT(-1, 1), BOTTOM(0, 1), BOTTOM_RIGHT(1, 1),
+    }
+
+    /** Place the text against an anchor, keeping [margin] of the print between the text and the edge. */
+    fun place(anchor: Anchor, widthFraction: Float, margin: Float = 0.06f) {
+        val halfW = widthFraction / 2
+        val halfH = size * 0.7f
+        x = when (anchor.h) { -1 -> margin + halfW; 1 -> 1f - margin - halfW; else -> 0.5f }.coerceIn(0.02f, 0.98f)
+        y = when (anchor.v) { -1 -> margin + halfH; 1 -> 1f - margin - halfH; else -> 0.5f }.coerceIn(0.02f, 0.98f)
+    }
+
+    fun copy() = Overlay(kind, text, x, y, size, dark, style, font)
 
     /** The string to draw, resolving date kinds against [photoDate] (or now). */
     fun resolve(photoDate: Long?): String {
@@ -239,6 +268,8 @@ object PrintRenderer {
         for (o in state.overlays) {
             val text = o.resolve(state.photoDate)
             val px = o.size * size
+            overlayPaint.typeface = o.font.typeface
+            overlayStroke.typeface = o.font.typeface
             overlayPaint.textSize = px
             overlayPaint.clearShadowLayer()
             val width = overlayPaint.measureText(text)
@@ -275,6 +306,13 @@ object PrintRenderer {
             )
         }
         return bounds
+    }
+
+    /** The width of an overlay's text as a fraction of the print size, for placing it against an edge. */
+    fun overlayWidth(o: Overlay, photoDate: Long?): Float {
+        overlayPaint.typeface = o.font.typeface
+        overlayPaint.textSize = o.size * 1000f
+        return overlayPaint.measureText(o.resolve(photoDate)) / 1000f
     }
 
     /**

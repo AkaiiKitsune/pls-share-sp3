@@ -90,6 +90,17 @@ class Strings private constructor(private val fr: Boolean) {
     val styleOutline get() = t("Contour", "Outline")
     val stylePill get() = t("Bulle", "Pill")
     val remove get() = t("Supprimer", "Remove")
+    val overlayFont get() = t("Police", "Font")
+    val overlayPosition get() = t("Position", "Position")
+    fun fontName(font: Overlay.Font): String = when (font) {
+        Overlay.Font.BOLD -> t("Gras", "Bold")
+        Overlay.Font.LIGHT -> t("Fin", "Light")
+        Overlay.Font.CONDENSED -> t("Condensé", "Condensed")
+        Overlay.Font.SERIF -> "Serif"
+        Overlay.Font.MONO -> "Mono"
+        Overlay.Font.CURSIVE -> t("Manuscrite", "Script")
+        Overlay.Font.CASUAL -> t("Décontractée", "Casual")
+    }
     val photoDateKnown get() = t("Date de la photo : %s", "Photo date: %s")
     val photoDateUnknown get() = t("Date de la photo inconnue : l'heure actuelle sera utilisée.", "Photo date unknown: the current time will be used.")
     val histogram get() = t("Histogramme", "Histogram")

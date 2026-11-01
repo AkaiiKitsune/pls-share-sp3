@@ -127,6 +127,7 @@ class MainActivity : Activity() {
     private lateinit var overlaySizeBar: SeekBar
     private lateinit var overlayDarkSwitch: Switch
     private lateinit var blackWhiteButton: Button
+    private val fontButtons = LinkedHashMap<Overlay.Font, Button>()
     private var photoDate: Long? = null
     private lateinit var presetRow: LinearLayout
     private val presetTiles = LinkedHashMap<String, Pair<ImageView, TextView>>()
@@ -746,6 +747,28 @@ class MainActivity : Activity() {
             }
         }
         overlayEditor.addView(overlayDarkSwitch)
+        ui.space(overlayEditor, 8)
+        overlayEditor.addView(ui.text(s.overlayFont, 13f, alpha = 0.7f))
+        ui.space(overlayEditor, 4)
+        val fontRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (font in Overlay.Font.values()) {
+            val b = ui.softButton(s.fontName(font)) { setOverlayFont(font) }.apply { typeface = font.typeface }
+            fontButtons[font] = b
+            fontRow.addView(b, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(6) })
+        }
+        overlayEditor.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(fontRow) })
+        ui.space(overlayEditor, 8)
+        overlayEditor.addView(ui.text(s.overlayPosition, 13f, alpha = 0.7f))
+        ui.space(overlayEditor, 4)
+        val arrows = listOf("↖", "↑", "↗", "←", "·", "→", "↙", "↓", "↘")
+        val anchors = Overlay.Anchor.values()
+        for (rowIndex in 0..2) {
+            val cells = (0..2).map { col ->
+                val anchor = anchors[rowIndex * 3 + col]
+                ui.softButton(arrows[rowIndex * 3 + col]) { setOverlayAnchor(anchor) }
+            }
+            overlayEditor.addView(ui.row(cells[0], cells[1], cells[2], gap = 6), LinearLayout.LayoutParams(ui.match, ui.wrap).apply { bottomMargin = ui.dp(6) })
+        }
         ui.space(overlayEditor, 6)
         overlayEditor.addView(ui.row(
             ui.softButton(s.styleShadow) { setOverlayStyle(Overlay.Style.SHADOW) },
@@ -768,6 +791,23 @@ class MainActivity : Activity() {
         editorView.selectedOverlay = overlay
         editorView.overlaysChanged()
         refreshOverlayPanel()
+    }
+
+    private fun setOverlayFont(font: Overlay.Font) {
+        editorView.selectedOverlay?.font = font
+        editorView.overlaysChanged()
+        syncFontButtons()
+    }
+
+    private fun syncFontButtons() {
+        val current = editorView.selectedOverlay?.font
+        for ((font, button) in fontButtons) button.setTextColor(if (font == current) ui.accent else labelColor)
+    }
+
+    private fun setOverlayAnchor(anchor: Overlay.Anchor) {
+        val o = editorView.selectedOverlay ?: return
+        o.place(anchor, PrintRenderer.overlayWidth(o, editorView.state.photoDate))
+        editorView.overlaysChanged()
     }
 
     private fun setOverlayStyle(style: Overlay.Style) {
@@ -813,6 +853,7 @@ class MainActivity : Activity() {
         if (o.kind == Overlay.Kind.TEXT && overlayTextField.text.toString() != o.text) overlayTextField.setText(o.text)
         overlaySizeBar.progress = (o.size * 1000f).toInt() - 15
         overlayDarkSwitch.isChecked = o.dark
+        syncFontButtons()
     }
 
     /** A labelled slider over [min]..[max] whose current value is read from the editor state by [read]. */
