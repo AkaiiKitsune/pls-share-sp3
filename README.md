@@ -47,6 +47,14 @@ L'interrupteur **mode test** envoie l'image sans lancer le tirage (aucun film co
 
 Si vous avez changé le PIN de l'imprimante (1111 par défaut), modifiez-le en bas de l'écran.
 
+### Si l'imprimante plante pendant l'attribution de l'adresse IP
+
+Sur certains téléphones récents (constaté avec un Pixel 7 Pro), la SP-3 se met en erreur et s'éteint pendant l'échange DHCP, que ce soit via l'appli ou via les réglages Wi-Fi d'Android. Contournement : **supprimer le DHCP** avec une adresse fixe. L'imprimante est toujours à `192.168.0.251`, même si sa plage DHCP change à chaque redémarrage.
+
+1. Réglages Android → Wi-Fi → `INSTAX-XXXXXXXX` → Options avancées : **Paramètres IP = Statique**, IP `192.168.0.5`, préfixe `24`, passerelle `192.168.0.251`, DNS `192.168.0.251`. Confidentialité : **MAC de l'appareil**.
+2. Rejoindre ce réseau, accepter « rester connecté » malgré l'absence d'Internet.
+3. Dans l'appli, appuyer sur **Wi-Fi actuel (IP fixe)** au lieu de « Connecter » : l'appli lie ses connexions au Wi-Fi en cours. Android n'autorise pas une appli à imposer une IP fixe sur un réseau qu'elle demande elle-même, d'où ce détour par les réglages.
+
 Le bord épais du tirage est le **bas** de l'image.
 
 ### Ce que l'appli ne fait pas (encore)

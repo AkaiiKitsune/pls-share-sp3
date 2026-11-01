@@ -21,6 +21,18 @@ class Strings private constructor(private val fr: Boolean) {
     val pickPhoto get() = t("2. Choisir une photo", "2. Pick a photo")
     val print get() = t("3. Imprimer", "3. Print")
     val info get() = t("Infos imprimante", "Printer info")
+    val useCurrentWifi get() = t("Wi-Fi actuel (IP fixe)", "Current Wi-Fi (static IP)")
+    val usingCurrentWifi get() = t("Utilisation du Wi-Fi rejoint à la main.", "Using the Wi-Fi you joined by hand.")
+    val noWifi get() = t("Aucun Wi-Fi actif. Rejoignez INSTAX-… dans les réglages Android, puis revenez ici.", "No Wi-Fi active. Join INSTAX-… in the Android settings, then come back here.")
+    val openWifiSettings get() = t("Ouvrir les réglages Wi-Fi", "Open Wi-Fi settings")
+    val staticHint get() = t(
+        "Si l'imprimante plante pendant l'attribution de l'adresse IP, contournez le DHCP : dans les réglages Wi-Fi d'Android, " +
+            "enregistrez INSTAX-XXXXXXXX avec Paramètres IP = Statique, IP 192.168.0.5, préfixe 24, passerelle 192.168.0.251, DNS 192.168.0.251, " +
+            "et Confidentialité = MAC de l'appareil. Rejoignez ce réseau (acceptez « rester connecté » sans Internet), puis appuyez sur « Wi-Fi actuel » ici.",
+        "If the printer crashes while assigning the IP address, skip DHCP: in the Android Wi-Fi settings, save INSTAX-XXXXXXXX with " +
+            "IP settings = Static, IP 192.168.0.5, prefix 24, gateway 192.168.0.251, DNS 192.168.0.251, and Privacy = device MAC. " +
+            "Join that network (accept staying connected without internet), then tap “Current Wi-Fi” here.",
+    )
     val fitCrop get() = t("Recadrer pour remplir", "Crop to fill")
     val fitContain get() = t("Photo entière (bandes blanches)", "Whole photo (white bars)")
     val pin get() = t("PIN de l'imprimante (1111 par défaut)", "Printer PIN (default 1111)")

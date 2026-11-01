@@ -15,6 +15,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
@@ -74,6 +75,7 @@ class MainActivity : Activity() {
     private lateinit var logView: TextView
     private lateinit var connectButton: Button
     private lateinit var infoButton: Button
+    private lateinit var currentWifiButton: Button
     private lateinit var pickButton: Button
     private lateinit var printButton: Button
     private lateinit var fitSwitch: Switch
@@ -144,6 +146,10 @@ class MainActivity : Activity() {
             button(s.connect) { connect() }.also { connectButton = it },
             button(s.info) { showInfo() }.also { infoButton = it },
         ))
+        root.addView(row(
+            button(s.useCurrentWifi) { useCurrentWifi() }.also { currentWifiButton = it },
+            button(s.openWifiSettings) { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) },
+        ))
         space(16)
 
         previewView = ImageView(this).apply {
@@ -194,6 +200,8 @@ class MainActivity : Activity() {
         space(24)
 
         root.addView(TextView(this).apply { text = s.hint; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); alpha = 0.75f })
+        space(8)
+        root.addView(TextView(this).apply { text = s.staticHint; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); alpha = 0.75f })
         space(16)
 
         root.addView(TextView(this).apply { text = s.pin; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f) })
@@ -271,7 +279,7 @@ class MainActivity : Activity() {
     }
 
     private fun setBusy(busy: Boolean) {
-        for (b in listOf(connectButton, infoButton, pickButton, printButton)) b.isEnabled = !busy
+        for (b in listOf(connectButton, infoButton, currentWifiButton, pickButton, printButton)) b.isEnabled = !busy
         fitSwitch.isEnabled = !busy
         progressBar.visibility = if (busy) View.VISIBLE else View.INVISIBLE
         progressBar.isIndeterminate = busy
@@ -303,6 +311,19 @@ class MainActivity : Activity() {
         })
     }
 
+    /** Use the Wi-Fi the user joined by hand (typically with a static IP) instead of requesting one. */
+    private fun useCurrentWifi() {
+        network.disconnect()
+        if (network.currentWifi() == null) {
+            journal("no Wi-Fi network active")
+            setStatus(s.noWifi)
+            return
+        }
+        journal("using the current Wi-Fi: ${network.describeBinding()}")
+        setStatus(s.usingCurrentWifi)
+        showInfo()
+    }
+
     private fun fit(): Fit = if (fitSwitch.isChecked) Fit.CONTAIN else Fit.CROP
 
     private fun printer(): InstaxPrinter? {
@@ -313,7 +334,7 @@ class MainActivity : Activity() {
         }
         val host = hostField.text.toString().trim().ifEmpty { InstaxPrinter.DEFAULT_HOST }
         prefs.edit().putString(PREF_PIN, pin.toString()).putString(PREF_HOST, host).apply()
-        journal("printer $host pin $pin, network ${network.network ?: "default (not bound)"}")
+        journal("printer $host pin $pin, bound to ${network.describeBinding()}")
         return InstaxPrinter(
             host = host, pin = pin, reachTimeoutMillis = REACH_TIMEOUT_MS,
             socketFactory = network.socketFactory(), logger = { journal(it) },

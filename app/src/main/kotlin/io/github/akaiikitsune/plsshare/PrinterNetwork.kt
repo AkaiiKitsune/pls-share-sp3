@@ -82,17 +82,26 @@ class PrinterNetwork(context: Context) {
         network = null
     }
 
+    /** Which network the sockets will be bound to, for the log. */
+    fun describeBinding(): String = when {
+        network != null -> "requested network $network"
+        currentWifi() != null -> "current Wi-Fi network ${currentWifi()}"
+        else -> "default network (no Wi-Fi active)"
+    }
+
     /**
      * A socket factory bound to the printer's network. Falls back to whatever Wi-Fi network the
-     * phone is on when the user joined INSTAX- by hand, and to the default factory otherwise.
+     * phone is on when the user joined INSTAX- by hand (for example with a static IP, which skips
+     * the DHCP exchange some printers choke on), and to the default factory otherwise.
      */
     fun socketFactory(): SocketFactory {
         val bound = network ?: currentWifi()
         return bound?.socketFactory ?: SocketFactory.getDefault()
     }
 
+    /** The Wi-Fi network the phone is on right now, requested by the app or joined by hand. */
     @Suppress("DEPRECATION")
-    private fun currentWifi(): Network? = connectivity.allNetworks.firstOrNull { n ->
+    fun currentWifi(): Network? = connectivity.allNetworks.firstOrNull { n ->
         connectivity.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
     }
 }
