@@ -39,6 +39,14 @@ object Processing {
         if (sharpen && state.sharpness > 0f) unsharpMask(pixels, width, height, state.sharpness / 100f * 1.6f)
     }
 
+    fun applyCurves(pixels: IntArray, lutR: IntArray, lutG: IntArray, lutB: IntArray) {
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            pixels[i] = (p and 0xFF000000.toInt()) or
+                (lutR[(p shr 16) and 0xFF] shl 16) or (lutG[(p shr 8) and 0xFF] shl 8) or lutB[p and 0xFF]
+        }
+    }
+
     fun applyCurve(pixels: IntArray, lut: IntArray) {
         for (i in pixels.indices) {
             val p = pixels[i]

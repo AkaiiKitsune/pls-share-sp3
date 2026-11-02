@@ -750,11 +750,14 @@ class MainActivity : Activity() {
             root.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
             ui.space(root, 6)
         }
-        calSlider(s.calExposure, -150, 50, { Math.round(film.exposure * 100f) }) { film.exposure = it / 100f }
-        calSlider(s.calContrast, 80, 180, { Math.round(film.contrast * 100f) }) { film.contrast = it / 100f }
-        calSlider(s.calBlack, 0, 25, { Math.round(film.blackClip * 100f) }) { film.blackClip = it / 100f }
-        calSlider(s.calWhite, 75, 100, { Math.round(film.whiteClip * 100f) }) { film.whiteClip = it / 100f }
-        calSlider(s.calSaturation, 60, 160, { Math.round(film.saturation * 100f) }) { film.saturation = it / 100f }
+        calSlider(s.calExposure, -100, 100, { Math.round(film.exposure * 100f) }) { film.exposure = it / 100f }
+        calSlider(s.calGamma, 30, 200, { Math.round(film.gamma * 100f) }) { film.gamma = it / 100f }
+        calSlider(s.calBlack, 0, 30, { Math.round(film.blackClip * 100f) }) { film.blackClip = it / 100f }
+        calSlider(s.calWhite, 70, 100, { Math.round(film.whiteClip * 100f) }) { film.whiteClip = it / 100f }
+        calSlider(s.calBlackLevel, 0, 40, { Math.round(film.blackLevel * 100f) }) { film.blackLevel = it / 100f }
+        calSlider(s.calWhiteLevel, 70, 100, { Math.round(film.whiteLevel * 100f) }) { film.whiteLevel = it / 100f }
+        calSlider(s.calShadowWarmth, 0, 100, { Math.round(film.shadowWarmth * 100f) }) { film.shadowWarmth = it / 100f }
+        calSlider(s.calSaturation, 40, 150, { Math.round(film.saturation * 100f) }) { film.saturation = it / 100f }
         calSlider(s.calWarmth, -60, 60, { Math.round(film.warmth * 100f) }) { film.warmth = it / 100f }
         calSlider(s.calTint, -60, 60, { Math.round(film.tint * 100f) }) { film.tint = it / 100f }
         calSlider(s.calBlue, 0, 100, { Math.round(film.blueDarkening * 100f) }) { film.blueDarkening = it / 100f }

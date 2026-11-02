@@ -8,65 +8,72 @@ import android.graphics.ColorMatrix
 import android.graphics.Paint
 
 /**
- * How the instax film and printer render the data we send, as a small parametric model, and its
+ * How the instax film and printer render the data we send, as a small parametric model, with its
  * inverse for pre-compensating prints.
  *
- * Starting values come from published observations (no manufacturer data exists):
- * - prints are darker than the screen (fujix-forum, SP-3 printing straight from a camera; Fujifilm's
- *   own note that the print "may differ from the screen");
- * - little latitude: about +1 / -2 stops with detail, shadows block up, highlights clip
- *   (photrio measurements on instax film; Emulsive; Digital Trends);
- * - more contrast and saturation than the screen (photographyblog, SP-3 review);
- * - saturated blues come out much darker, warm colours very slightly green (Emulsive, SP-2);
- * - the grey balance is disputed: Dom Varney's ICC profiling of the SP-2 needed a 7-step yellow
- *   shift for neutral greys (bluish prints), Emulsive found whites neutral. The default is a
- *   slight cool cast, between the two.
- * The calibration screen lets the user fit these to their own printer and film batch.
+ * The defaults were fitted on a real SP-3 print of [TestChart] (instax SQUARE colour film),
+ * photographed next to the phone and measured relative to the paper white:
+ * - inputs below about 20 % all print as the same black, inputs above about 88 % as the same white;
+ * - the darkest black is far from pure black and the brightest white stays below the paper white
+ *   (instax has a modest density range), so the print's own range is compressed at both ends;
+ * - in between, midtones print lighter than the input (50 % grey came out at about 67 % of the
+ *   paper white), a concave curve, gamma ≈ 0.6;
+ * - blacks are warm (red/brown), mid greys nearly neutral with a touch of magenta;
+ * - colours are clearly less saturated than on screen; blues come out lighter, not darker.
+ * A camera photo of a print lifts blacks and desaturates a little (flare), so the black level and
+ * the saturation are tempered. The calibration screen lets the user fit the rest by eye.
  */
 class FilmModel(
-    /** Exposure offset in stops; negative = darker print. */
-    var exposure: Float = -0.35f,
-    /** Midtone slope around mid-grey; > 1 compresses the latitude (clips both ends). */
-    var contrast: Float = 1.18f,
-    /** Below this input level everything prints black (0..0.2). */
-    var blackClip: Float = 0.05f,
-    /** Above this input level everything prints white (0.8..1). */
-    var whiteClip: Float = 0.96f,
-    var saturation: Float = 1.08f,
+    /** Exposure offset in stops applied to the input; 0 = as measured. */
+    var exposure: Float = 0f,
+    /** Midtone curve inside the usable range; < 1 lifts the midtones (as measured), > 1 darkens them. */
+    var gamma: Float = 0.62f,
+    /** Inputs below this level all print as the darkest black (0..0.3). */
+    var blackClip: Float = 0.20f,
+    /** Inputs above this level all print as the brightest white (0.7..1). */
+    var whiteClip: Float = 0.88f,
+    /** The darkest black the film produces, as a fraction of the paper white (0..0.4). */
+    var blackLevel: Float = 0.17f,
+    /** The brightest white the film produces, as a fraction of the paper white (0.7..1). */
+    var whiteLevel: Float = 0.92f,
+    /** How red/brown the blacks are (0 = neutral blacks, 1 = strongly warm). */
+    var shadowWarmth: Float = 0.6f,
+    var saturation: Float = 0.72f,
     /** Grey balance in the blue-yellow direction: negative = bluish print, positive = yellowish. */
-    var warmth: Float = -0.05f,
-    /** Grey balance in the green-magenta direction: negative = greenish. */
-    var tint: Float = -0.02f,
-    /** How much darker saturated blues print (0 = not at all, 1 = strongly). */
-    var blueDarkening: Float = 0.5f,
+    var warmth: Float = 0f,
+    /** Grey balance in the green-magenta direction: negative = greenish, positive = magenta. */
+    var tint: Float = 0.05f,
+    /** Extra darkening of saturated blues (0 = none; the measured print did not show any). */
+    var blueDarkening: Float = 0f,
 ) {
     companion object {
-        private const val PREFIX = "film."
+        private const val PREFIX = "film2."
 
         fun load(prefs: SharedPreferences): FilmModel {
             val m = FilmModel()
             fun f(key: String, default: Float) = prefs.getFloat(PREFIX + key, default)
-            m.exposure = f("exposure", m.exposure); m.contrast = f("contrast", m.contrast)
+            m.exposure = f("exposure", m.exposure); m.gamma = f("gamma", m.gamma)
             m.blackClip = f("blackClip", m.blackClip); m.whiteClip = f("whiteClip", m.whiteClip)
-            m.saturation = f("saturation", m.saturation); m.warmth = f("warmth", m.warmth)
-            m.tint = f("tint", m.tint); m.blueDarkening = f("blueDarkening", m.blueDarkening)
+            m.blackLevel = f("blackLevel", m.blackLevel); m.whiteLevel = f("whiteLevel", m.whiteLevel)
+            m.shadowWarmth = f("shadowWarmth", m.shadowWarmth); m.saturation = f("saturation", m.saturation)
+            m.warmth = f("warmth", m.warmth); m.tint = f("tint", m.tint); m.blueDarkening = f("blueDarkening", m.blueDarkening)
             return m
         }
-
     }
 
     fun save(prefs: SharedPreferences) {
         prefs.edit()
-            .putFloat(PREFIX + "exposure", exposure).putFloat(PREFIX + "contrast", contrast)
+            .putFloat(PREFIX + "exposure", exposure).putFloat(PREFIX + "gamma", gamma)
             .putFloat(PREFIX + "blackClip", blackClip).putFloat(PREFIX + "whiteClip", whiteClip)
-            .putFloat(PREFIX + "saturation", saturation).putFloat(PREFIX + "warmth", warmth)
-            .putFloat(PREFIX + "tint", tint).putFloat(PREFIX + "blueDarkening", blueDarkening)
+            .putFloat(PREFIX + "blackLevel", blackLevel).putFloat(PREFIX + "whiteLevel", whiteLevel)
+            .putFloat(PREFIX + "shadowWarmth", shadowWarmth).putFloat(PREFIX + "saturation", saturation)
+            .putFloat(PREFIX + "warmth", warmth).putFloat(PREFIX + "tint", tint).putFloat(PREFIX + "blueDarkening", blueDarkening)
             .apply()
     }
 
-    fun copy() = FilmModel(exposure, contrast, blackClip, whiteClip, saturation, warmth, tint, blueDarkening)
+    fun copy() = FilmModel(exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening)
 
-    /** The colour part of the model: saturation, grey balance and blue darkening. */
+    /** The colour part of the model: saturation and grey balance. */
     fun colorMatrix(): ColorMatrix {
         val m = ColorMatrix()
         m.setSaturation(saturation)
@@ -79,31 +86,44 @@ class FilmModel(
         return m
     }
 
-    /** The inverse of [colorMatrix], for compensation. */
     fun inverseColorMatrix(): ColorMatrix = invert(colorMatrix())
 
-    /** The tone part: exposure, latitude compression and clipping, as a lookup table on sRGB levels. */
-    fun toneCurve(): IntArray {
+    /** The black level of each channel: warm blacks have more red and less blue. */
+    private fun blackLevels(): FloatArray = floatArrayOf(
+        (blackLevel * (1f + 0.35f * shadowWarmth)).coerceIn(0f, 0.6f),
+        (blackLevel * (1f - 0.05f * shadowWarmth)).coerceIn(0f, 0.6f),
+        (blackLevel * (1f - 0.25f * shadowWarmth)).coerceIn(0f, 0.6f),
+    )
+
+    /**
+     * The tone curve of one channel: exposure, input clipping to the usable range, midtone gamma,
+     * then the output compressed between the channel's black level and the white level.
+     */
+    fun toneCurve(channelBlack: Float): IntArray {
         val lut = IntArray(256)
-        val gain = Math.pow(2.0, exposure.toDouble()).toFloat()
+        val gain = Math.pow(2.0, exposure.toDouble())
+        val range = (whiteClip - blackClip).coerceAtLeast(0.05f)
         for (i in 0..255) {
-            var v = i / 255f
-            // Exposure in linear light, back to display gamma.
-            v = Math.pow(Math.pow(v.toDouble(), 2.2) * gain, 1 / 2.2).toFloat()
-            // Latitude: the usable range shrinks to [blackClip, whiteClip], steeper in the middle.
-            v = (v - blackClip) / (whiteClip - blackClip)
-            v = 0.5f + (v - 0.5f) * contrast
-            lut[i] = Math.round(v.coerceIn(0f, 1f) * 255f)
+            var v = (i / 255.0)
+            v = Math.pow(Math.pow(v, 2.2) * gain, 1 / 2.2)
+            var u = ((v - blackClip) / range).coerceIn(0.0, 1.0)
+            u = Math.pow(u, gamma.toDouble().coerceAtLeast(0.1))
+            val out = channelBlack + u * (whiteLevel - channelBlack)
+            lut[i] = Math.round(out.coerceIn(0.0, 1.0) * 255).toInt()
         }
         return lut
     }
 
+    fun toneCurves(): Array<IntArray> {
+        val blacks = blackLevels()
+        return arrayOf(toneCurve(blacks[0]), toneCurve(blacks[1]), toneCurve(blacks[2]))
+    }
+
     /**
-     * The inverse tone curve: for each wanted print level, the input level that produces it. Levels
-     * the film cannot reach (beyond the clips) map to the nearest reachable input.
+     * The inverse of a tone curve: for each wanted print level, the input level that produces it.
+     * Levels the film cannot reach map to the nearest reachable input (black or white).
      */
-    fun inverseToneCurve(): IntArray {
-        val forward = toneCurve()
+    fun inverseToneCurve(forward: IntArray): IntArray {
         val inverse = IntArray(256)
         var j = 0
         for (target in 0..255) {
@@ -113,25 +133,28 @@ class FilmModel(
         return inverse
     }
 
+    fun inverseToneCurves(): Array<IntArray> = toneCurves().map { inverseToneCurve(it) }.toTypedArray()
+
     /** Apply the model to pixels (display simulation): colours, blue darkening, then tones. */
     fun simulate(pixels: IntArray) {
         applyMatrix(pixels, colorMatrix())
         darkenBlues(pixels, inverse = false)
-        Processing.applyCurve(pixels, toneCurve())
+        val c = toneCurves()
+        Processing.applyCurves(pixels, c[0], c[1], c[2])
     }
 
     /** Apply the inverse model to pixels (print compensation), in reverse order. */
     fun compensate(pixels: IntArray) {
-        Processing.applyCurve(pixels, inverseToneCurve())
+        val c = inverseToneCurves()
+        Processing.applyCurves(pixels, c[0], c[1], c[2])
         darkenBlues(pixels, inverse = true)
         applyMatrix(pixels, inverseColorMatrix())
     }
 
     /**
-     * Saturated blues print darker: each pixel is scaled (hue preserved) by 1 − a·blueness, where
-     * blueness = max(0, B − (R+G)/2) / 255 and a = 0.6 · [blueDarkening]. Neutral pixels are untouched.
-     * The inverse solves f² − f + a·b_out = 0 for the scale that was applied; blues darker than
-     * the film can produce are mapped to the strongest compensation available.
+     * Optional darkening of saturated blues, hue preserved: each pixel is scaled by 1 − a·blueness,
+     * blueness = max(0, B − (R+G)/2) / 255, a = 0.6 · [blueDarkening]. The inverse solves
+     * f² − f + a·b_out = 0; blues darker than the film can produce get the strongest compensation.
      */
     private fun darkenBlues(pixels: IntArray, inverse: Boolean) {
         val a = blueDarkening * 0.6f
@@ -150,10 +173,8 @@ class FilmModel(
                 if (disc <= 0f) 0.5f else (1f + Math.sqrt(disc.toDouble()).toFloat()) / 2f
             }
             val scale = if (inverse) 1f / factor else factor
-            val nr = (r * scale).toInt().coerceIn(0, 255)
-            val ng = (g * scale).toInt().coerceIn(0, 255)
-            val nb = (b * scale).toInt().coerceIn(0, 255)
-            pixels[i] = (p and 0xFF000000.toInt()) or (nr shl 16) or (ng shl 8) or nb
+            pixels[i] = (p and 0xFF000000.toInt()) or
+                ((r * scale).toInt().coerceIn(0, 255) shl 16) or ((g * scale).toInt().coerceIn(0, 255) shl 8) or (b * scale).toInt().coerceIn(0, 255)
         }
     }
 
@@ -218,14 +239,12 @@ object TestChart {
         canvas.drawColor(Color.WHITE)
         val margin = size * 0.04f
         val inner = size - 2 * margin
-        // Row 1-2: grey steps (0 % .. 100 %), each step labelled by position only.
         val stepW = inner / greys.size
         val stepH = size * 0.14f
         greys.forEachIndexed { i, v ->
             paint.color = Color.rgb(v, v, v)
             canvas.drawRect(margin + i * stepW, margin, margin + (i + 1) * stepW, margin + stepH, paint)
         }
-        // Row 3-6: colour patches in a 4x4 grid.
         val gridTop = margin + stepH + size * 0.04f
         val cell = inner / 4
         val gap = size * 0.012f
@@ -237,7 +256,6 @@ object TestChart {
             val top = gridTop + row * cell * 0.75f + gap
             canvas.drawRect(left, top, left + cell - 2 * gap, top + cell * 0.75f - 2 * gap, paint)
         }
-        // Bottom: a continuous gradient black -> white to see where it blocks and clips.
         val gradTop = size - margin - size * 0.10f
         val shader = android.graphics.LinearGradient(margin, 0f, size - margin, 0f, Color.BLACK, Color.WHITE, android.graphics.Shader.TileMode.CLAMP)
         val gp = Paint().apply { this.shader = shader }
