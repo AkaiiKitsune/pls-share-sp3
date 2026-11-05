@@ -153,6 +153,13 @@ class Strings private constructor(private val fr: Boolean) {
     val deleteEntry get() = t("Supprimer cet élément ?", "Delete this item?")
     val notificationsHint get() = t("Autorisez les notifications pour suivre l'impression quand l'appli est en arrière-plan.", "Allow notifications to follow printing while the app is in the background.")
 
+    // Film type
+    val filmColor get() = t("Couleur", "Colour")
+    val filmMono get() = t("Monochrome", "Monochrome")
+    val filmTypeLabel get() = t("Film", "Film")
+    val calibrateTitleFor get() = t("Calibrer : film %s", "Calibrate: %s film")
+    val monoNote get() = t("Film monochrome : la couleur n'est pas imprimée, l'aperçu et les réglages de couleur sont masqués.", "Monochrome film: colour is not printed, the preview and the colour controls are hidden.")
+
     // Film calibration
     val menuCalibrate get() = t("Calibrer l'aperçu film…", "Calibrate the film preview…")
     val menuCompensate get() = t("Compenser le tirage", "Compensate prints")

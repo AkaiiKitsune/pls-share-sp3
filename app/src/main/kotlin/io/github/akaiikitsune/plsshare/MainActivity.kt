@@ -69,6 +69,7 @@ class MainActivity : Activity() {
         private const val PREF_FILM = "filmPreview"
         private const val PREF_QUEUE = "queue"
         private const val PREF_COMPENSATE = "compensate"
+        private const val PREF_FILM_TYPE = "filmType"
         private const val MENU_QUEUE = 7
         private const val MENU_CALIBRATE = 8
         private const val MENU_COMPENSATE = 9
@@ -107,7 +108,15 @@ class MainActivity : Activity() {
     private lateinit var chartView: ImageView
     private lateinit var film: FilmModel
     private var compensate = false
-    private val chartBase by lazy { TestChart.render(400) }
+    private var filmType = FilmType.COLOR
+    private var chartBase: Bitmap? = null
+    private lateinit var filmTypeSelector: Ui.Segmented
+    private lateinit var calibrationTitle: TextView
+    private lateinit var monoNoteView: TextView
+    /** Views of the editor that only make sense on colour film. */
+    private val colourOnlyViews = ArrayList<View>()
+    /** Calibration sliders that only make sense on colour film (bar + its header). */
+    private val colourOnlyCal = ArrayList<View>()
     private lateinit var historyList: LinearLayout
     private lateinit var queueRow: LinearLayout
     private lateinit var queueEmptyText: TextView
@@ -195,7 +204,9 @@ class MainActivity : Activity() {
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         debug = prefs.getBoolean(PREF_DEBUG, false)
         queueEnabled = prefs.getBoolean(PREF_QUEUE, false)
-        film = FilmModel.load(prefs)
+        filmType = FilmType.fromKey(prefs.getString(PREF_FILM_TYPE, null))
+        film = FilmModel.load(prefs, filmType)
+        PrintRenderer.monochrome = filmType.monochrome
         compensate = prefs.getBoolean(PREF_COMPENSATE, false)
 
         container = FrameLayout(this)
@@ -217,6 +228,7 @@ class MainActivity : Activity() {
         historyView = buildHistory()
         calibrateView = buildCalibration()
         container.addView(homeView)
+        applyFilmType()
         applyFilmModel()
         setContentView(container)
         applyDebugVisibility()
@@ -323,6 +335,15 @@ class MainActivity : Activity() {
             addView(previewHint, FrameLayout.LayoutParams(ui.wrap, ui.wrap, Gravity.CENTER))
         }
         root.addView(previewFrame)
+        filmTypeSelector = ui.Segmented(listOf(s.filmColor, s.filmMono)) { index -> setFilmType(if (index == 0) FilmType.COLOR else FilmType.MONO) }
+        val filmRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.text(s.filmTypeLabel, 14f), LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(12) })
+            addView(filmTypeSelector.view, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+        }
+        root.addView(filmRow)
+        ui.space(root, 6)
         filmSwitch = Switch(this).apply {
             text = s.filmPreview
             isChecked = prefs.getBoolean(PREF_FILM, false)
@@ -707,6 +728,9 @@ class MainActivity : Activity() {
     private fun buildCalibration(): View {
         val root = ui.column(20)
         root.addView(ui.text(s.calibrateIntro, 14f))
+        ui.space(root, 8)
+        monoNoteView = ui.text(s.monoNote, 13f, alpha = 0.7f)
+        root.addView(monoNoteView)
         ui.space(root, 12)
         root.addView(ui.text(s.chartSimulated, 13f, alpha = 0.7f))
         ui.space(root, 6)
@@ -725,7 +749,7 @@ class MainActivity : Activity() {
         root.addView(ui.softButton(s.printChart) { printChart() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 16)
 
-        fun calSlider(label: String, min: Int, max: Int, read: () -> Int, write: (Int) -> Unit) {
+        fun calSlider(label: String, min: Int, max: Int, read: () -> Int, colourOnly: Boolean = false, write: (Int) -> Unit) {
             val value = ui.text(read().toString(), 13f, alpha = 0.7f).apply { gravity = Gravity.END }
             val header = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -748,7 +772,9 @@ class MainActivity : Activity() {
             }
             calBars += bar to { read() - min }
             root.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
-            ui.space(root, 6)
+            val spacer = View(this)
+            root.addView(spacer, ViewGroup.LayoutParams(ui.match, ui.dp(6)))
+            if (colourOnly) { colourOnlyCal += header; colourOnlyCal += bar; colourOnlyCal += spacer }
         }
         calSlider(s.calExposure, -100, 100, { Math.round(film.exposure * 100f) }) { film.exposure = it / 100f }
         calSlider(s.calGamma, 30, 200, { Math.round(film.gamma * 100f) }) { film.gamma = it / 100f }
@@ -757,13 +783,13 @@ class MainActivity : Activity() {
         calSlider(s.calBlackLevel, 0, 40, { Math.round(film.blackLevel * 100f) }) { film.blackLevel = it / 100f }
         calSlider(s.calWhiteLevel, 70, 100, { Math.round(film.whiteLevel * 100f) }) { film.whiteLevel = it / 100f }
         calSlider(s.calShadowWarmth, 0, 100, { Math.round(film.shadowWarmth * 100f) }) { film.shadowWarmth = it / 100f }
-        calSlider(s.calSaturation, 40, 150, { Math.round(film.saturation * 100f) }) { film.saturation = it / 100f }
+        calSlider(s.calSaturation, 40, 150, { Math.round(film.saturation * 100f) }, colourOnly = true) { film.saturation = it / 100f }
         calSlider(s.calWarmth, -60, 60, { Math.round(film.warmth * 100f) }) { film.warmth = it / 100f }
         calSlider(s.calTint, -60, 60, { Math.round(film.tint * 100f) }) { film.tint = it / 100f }
-        calSlider(s.calBlue, 0, 100, { Math.round(film.blueDarkening * 100f) }) { film.blueDarkening = it / 100f }
+        calSlider(s.calBlue, 0, 100, { Math.round(film.blueDarkening * 100f) }, colourOnly = true) { film.blueDarkening = it / 100f }
         ui.space(root, 8)
         root.addView(ui.softButton(s.calReset) {
-            film = FilmModel()
+            film = FilmModel.defaults(filmType)
             film.save(prefs)
             syncCalibration()
             onFilmChanged()
@@ -771,7 +797,9 @@ class MainActivity : Activity() {
         ui.space(root, 16)
         root.addView(ui.text(s.compensateHint, 13f, alpha = 0.7f))
         ui.space(root, 16)
-        return fixedHeaderScreen(titleBar(s.calibrateTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 }), root)
+        val header = titleBar(s.calibrateTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 })
+        calibrationTitle = header.getChildAt(0) as TextView
+        return fixedHeaderScreen(header, root)
     }
 
     private val calBars = ArrayList<Pair<SeekBar, () -> Int>>()
@@ -788,12 +816,14 @@ class MainActivity : Activity() {
 
     private fun refreshChart() {
         // The chart is always printed raw, so the simulation shows it without compensation.
-        chartView.setImageBitmap(film.simulated(chartBase))
+        val base = chartBase ?: TestChart.render(400, filmType).also { chartBase = it }
+        syncCalibration()
+        chartView.setImageBitmap(film.simulated(base))
     }
 
     private fun printChart() {
         if (connected == null) return message(s.notConnectedYet)
-        val file = Jobs.save(Jobs.queueDir(this), TestChart.render(PREVIEW_SIZE))
+        val file = Jobs.save(Jobs.queueDir(this), TestChart.render(PREVIEW_SIZE, filmType))
         startPrinting(listOf(file), archive = false)
     }
 
@@ -985,7 +1015,7 @@ class MainActivity : Activity() {
             ui.softButton(s.rotate) { editorView.update { rotation = (Math.round(rotation / 90f) + 1) * 90f % 360f } },
             ui.softButton(s.fill) { editorView.update { scale = 1f; offsetX = 0f; offsetY = 0f } },
             ui.softButton(s.whole) { editorView.update { scale = PrintRenderer.containScale(editorView.bitmap!!, this); offsetX = 0f; offsetY = 0f } },
-            ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() }.also { blackWhiteButton = it },
+            ui.softButton(s.blackWhite) { editorView.update { saturation = if (saturation == 0f) 1f else 0f }; syncSliders() }.also { blackWhiteButton = it; colourOnlyViews += it },
             ui.softButton(s.reset) { editorView.update { reset() }; syncSliders(); syncPresets(); syncFrameColors() },
             gap = 6,
         ))
@@ -1009,6 +1039,7 @@ class MainActivity : Activity() {
                 setOnClickListener { editorView.update { filter = preset.id }; syncPresets() }
             }
             presetTiles[preset.id] = thumb to label
+            if (preset.id in setOf("vivid", "warm", "cool", "sepia", "mono", "retro")) colourOnlyViews += tile
             presetRow.addView(tile, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(10) })
         }
         adjust.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
@@ -1037,12 +1068,15 @@ class MainActivity : Activity() {
         slider(adjust, s.blacks, -100, 100, { it.blacks.toInt() }) { v -> editorView.update { blacks = v.toFloat() } }
         ui.space(adjust, 8)
 
-        adjust.addView(ui.text(s.colour, 14f, bold = true))
-        ui.space(adjust, 6)
-        slider(adjust, s.temperature, -100, 100, { it.temperature.toInt() }) { v -> editorView.update { temperature = v.toFloat() } }
-        slider(adjust, s.tint, -100, 100, { it.tint.toInt() }) { v -> editorView.update { tint = v.toFloat() } }
-        slider(adjust, s.saturation, 0, 200, { (it.saturation * 100f).toInt() }, default = 100) { v -> editorView.update { saturation = v / 100f }; syncSliders() }
-        ui.space(adjust, 8)
+        val colourSection = ui.column()
+        colourSection.addView(ui.text(s.colour, 14f, bold = true))
+        ui.space(colourSection, 6)
+        slider(colourSection, s.temperature, -100, 100, { it.temperature.toInt() }) { v -> editorView.update { temperature = v.toFloat() } }
+        slider(colourSection, s.tint, -100, 100, { it.tint.toInt() }) { v -> editorView.update { tint = v.toFloat() } }
+        slider(colourSection, s.saturation, 0, 200, { (it.saturation * 100f).toInt() }, default = 100) { v -> editorView.update { saturation = v / 100f }; syncSliders() }
+        ui.space(colourSection, 8)
+        adjust.addView(colourSection, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        colourOnlyViews += colourSection
 
         adjust.addView(ui.text(s.details, 14f, bold = true))
         ui.space(adjust, 6)
@@ -1064,6 +1098,9 @@ class MainActivity : Activity() {
                 setOnClickListener { editorView.update { frameColor = color }; syncFrameColors() }
             }
             frameColorButtons += chip
+            // On monochrome film only the neutral frames make sense.
+            val neutral = Color.red(color) == Color.green(color) && Color.green(color) == Color.blue(color)
+            if (!neutral) colourOnlyViews += chip
             colorRow.addView(chip, LinearLayout.LayoutParams(ui.dp(36), ui.dp(36)).apply { marginEnd = ui.dp(10) })
         }
         adjust.addView(colorRow)
@@ -1525,6 +1562,29 @@ class MainActivity : Activity() {
         previewImage.compensated = compensate
         editorView.film = film
         editorView.compensated = compensate
+    }
+
+    private fun setFilmType(type: FilmType) {
+        if (type == filmType) return
+        filmType = type
+        prefs.edit().putString(PREF_FILM_TYPE, type.key).apply()
+        film = FilmModel.load(prefs, type)
+        PrintRenderer.monochrome = type.monochrome
+        chartBase = null
+        applyFilmType()
+        applyFilmModel()
+        refreshPreview()
+        if (container.getChildAt(0) === editorScreen) { buildThumbnails(editorView.bitmap ?: return); editorView.invalidateFrame() }
+    }
+
+    /** Show or hide what only applies to colour film, everywhere. */
+    private fun applyFilmType() {
+        val mono = filmType.monochrome
+        filmTypeSelector.select(if (mono) 1 else 0)
+        for (v in colourOnlyViews) v.visibility = if (mono) View.GONE else View.VISIBLE
+        for (v in colourOnlyCal) v.visibility = if (mono) View.GONE else View.VISIBLE
+        monoNoteView.visibility = if (mono) View.VISIBLE else View.GONE
+        calibrationTitle.text = s.calibrateTitleFor.format(if (mono) s.filmMono else s.filmColor)
     }
 
     private fun print() {

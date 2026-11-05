@@ -245,9 +245,17 @@ object PrintRenderer {
         state.offsetY = state.offsetY.coerceIn(-areaHalfH - halfH + 0.1f, areaHalfH + halfH - 0.1f)
     }
 
+    /** Set when the selected film is monochrome: everything renders as luminance, on screen and for the print. */
+    @Volatile var monochrome = false
+
     /** The colour matrix part of the look: preset, saturation, temperature and tint. */
     fun colorMatrix(state: EditState): ColorMatrix {
         val matrix = ColorMatrix(Filters.byId(state.filter).matrix)
+        if (monochrome) {
+            val grey = ColorMatrix().apply { setSaturation(0f) }
+            matrix.postConcat(grey)
+            return matrix
+        }
         val saturation = ColorMatrix().apply { setSaturation(state.saturation) }
         matrix.postConcat(saturation)
         val t = state.temperature / 100f
