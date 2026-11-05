@@ -99,11 +99,13 @@ object Processing {
     }
 
     /**
-     * Auto levels: stretch the luminance so that the darkest 0.5 % of pixels become black and the
-     * brightest 0.5 % white, expressed as the brightness and contrast sliders (-100..100).
-     * Returns null when the photo already uses the full range.
+     * Auto levels: stretch the luminance so that the darkest 0.5 % of pixels land on [targetLow]
+     * and the brightest 0.5 % on [targetHigh] (fractions of full scale; 0 and 1 for the whole
+     * range, or the film's usable input range so nothing blocks up or clips on the print),
+     * expressed as the brightness and contrast sliders (-100..100). Returns null when the photo
+     * already sits on that range.
      */
-    fun autoLevels(pixels: IntArray): Pair<Float, Float>? {
+    fun autoLevels(pixels: IntArray, targetLow: Float = 0f, targetHigh: Float = 1f): Pair<Float, Float>? {
         val luma = histogram(pixels, stride = 1)[3]
         val total = luma.sum()
         if (total == 0) return null
@@ -117,9 +119,11 @@ object Processing {
         if (high - low < 16) return null
         val lo = low / 255f
         val hi = high / 255f
-        val c = (1f / (hi - lo)).coerceIn(1f, 2f)
-        // v' = 0.5 + (v + b - 0.5)·c must equal (v - lo)·c, so b = 0.5 - 0.5/c - lo.
-        val b = 0.5f - 0.5f / c - lo
+        // v' = targetLow + (v - lo) · c with c = (targetHigh - targetLow) / (hi - lo), written as
+        // the sliders' v' = 0.5 + (v + b - 0.5) · c, so b = (targetLow - 0.5) / c + 0.5 - lo.
+        val c = ((targetHigh - targetLow) / (hi - lo)).coerceIn(0.25f, 2f)
+        val b = (targetLow - 0.5f) / c + 0.5f - lo
+        if (Math.abs(c - 1f) < 0.02f && Math.abs(b) < 0.01f) return null
         val brightness = (b * 200f).coerceIn(-100f, 100f)
         val contrast = ((c - 1f) * 100f).coerceIn(-100f, 100f)
         return brightness to contrast

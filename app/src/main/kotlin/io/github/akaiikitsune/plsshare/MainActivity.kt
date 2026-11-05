@@ -1368,14 +1368,17 @@ class MainActivity : Activity() {
         val sample = PrintRenderer.render(bitmap, probe, 256, sharpen = false)
         val pixels = IntArray(256 * 256)
         sample.getPixels(pixels, 0, 256, 0, 0, 256, 256)
-        val levels = Processing.autoLevels(pixels)
+        // With the film preview on (and no compensation, which already maps the full range onto
+        // the film), aim at the film's usable input range instead of the full scale.
+        val forFilm = editorView.filmPreview && !compensate
+        val levels = if (forFilm) Processing.autoLevels(pixels, film.blackClip, film.whiteClip) else Processing.autoLevels(pixels)
         if (levels == null) {
             message(s.autoNothing)
             return
         }
         editorView.update { brightness = levels.first; contrast = levels.second }
         syncSliders()
-        message(s.autoDone)
+        message(if (forFilm) s.autoDoneFilm else s.autoDone)
     }
 
     private fun refreshPresetRow() {
