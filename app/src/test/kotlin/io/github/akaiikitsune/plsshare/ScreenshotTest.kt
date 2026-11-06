@@ -121,13 +121,26 @@ class ScreenshotTest {
             for ((x, y) in listOf(639 to 1214, 2332 to 1226, 2320 to 2824, 627 to 2812)) cornerPick.corners += floatArrayOf(x * k, y * k)
             call(activity, "syncMeasureButtons")
             val reading = ChartReader.read(scaled, cornerPick.cornersArray()!!, FilmType.COLOR)
-            val (model, report) = ChartReader.fit(reading, FilmType.COLOR)
-            (field(activity, "measureReport") as android.widget.TextView).text = "Résultat : $report."
+            val fit = ChartReader.fit(reading, FilmType.COLOR)
+            val model = fit.model
+            (field(activity, "measureReport") as android.widget.TextView).text = "Résultat : %.1f %%.".format(fit.greyRms)
             val strip = MainActivity::class.java.getDeclaredMethod("comparisonStrip", ChartReader.Reading::class.java, FilmModel::class.java).apply { isAccessible = true }
             (field(activity, "measureCompare") as android.widget.ImageView).setImageBitmap(strip.invoke(activity, reading, model) as Bitmap)
+            val patches = MainActivity::class.java.getDeclaredMethod("patchStrip", ChartReader.Reading::class.java, FilmModel::class.java).apply { isAccessible = true }
+            (field(activity, "measureColourCompare") as android.widget.ImageView).setImageBitmap(patches.invoke(activity, reading, model) as Bitmap)
+            val hues = MainActivity::class.java.getDeclaredMethod("describeHues", FilmModel::class.java).apply { isAccessible = true }
+            (field(activity, "measureColourReport") as android.widget.TextView).text =
+                "Couleurs : erreur %.1f %% avec les réglages globaux, %.1f %% après correction par teinte.\n%s".format(fit.colourRmsBefore, fit.colourRmsAfter, hues.invoke(activity, model))
             (field(activity, "measureResultBox") as View).visibility = View.VISIBLE
             val measure = field(activity, "measureView") as View
             shoot(measure, "09-measure", w, h, scrollTo = 300)
+            shoot(measure, "09b-measure-result", w, h, scrollTo = 5000)
+            // Press on corner 3 to show the loupe.
+            val v3 = cornerPick.javaClass.getDeclaredMethod("toView", FloatArray::class.java).apply { isAccessible = true }.invoke(cornerPick, cornerPick.corners[2]) as FloatArray
+            val down = android.view.MotionEvent.obtain(0, 0, android.view.MotionEvent.ACTION_DOWN, v3[0], v3[1], 0)
+            cornerPick.dispatchTouchEvent(down)
+            shoot(measure, "09c-measure-loupe", w, h, scrollTo = 300)
+            cornerPick.dispatchTouchEvent(android.view.MotionEvent.obtain(0, 0, android.view.MotionEvent.ACTION_UP, v3[0], v3[1], 0))
         }
     }
 

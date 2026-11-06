@@ -62,9 +62,57 @@ class FilmModel(
      * instax film softens the image noticeably, so the print is sharpened in advance.
      */
     var printSharpness: Float = 35f,
+    /**
+     * Per-hue correction in six sectors (red, yellow, green, cyan, blue, magenta, interpolated by
+     * hue angle): how many degrees the film rotates each hue, how it scales its saturation on top
+     * of the global [saturation], and how it darkens (or lightens) it, in proportion to the
+     * colour's saturation so that neutrals are untouched. Only measured from a photo of the chart,
+     * never set by hand.
+     */
+    var hueShift: FloatArray = FloatArray(HUES),
+    var hueGain: FloatArray = FloatArray(HUES) { 1f },
+    var hueValue: FloatArray = FloatArray(HUES) { 1f },
 ) {
     companion object {
         private const val PREFIX = "film3."
+        const val HUES = 6
+        val HUE_NAMES = listOf("R", "Y", "G", "C", "B", "M")
+
+        /** RGB (0..255) to hue (0..360), saturation and value (0..1), into [out]. */
+        fun rgbToHsv(r: Int, g: Int, b: Int, out: FloatArray) {
+            val max = maxOf(r, g, b)
+            val min = minOf(r, g, b)
+            val d = (max - min).toFloat()
+            out[2] = max / 255f
+            out[1] = if (max == 0) 0f else d / max
+            out[0] = when {
+                d == 0f -> 0f
+                max == r -> 60f * (((g - b) / d) % 6f)
+                max == g -> 60f * ((b - r) / d + 2f)
+                else -> 60f * ((r - g) / d + 4f)
+            }.let { if (it < 0f) it + 360f else it }
+        }
+
+        /** Hue, saturation, value back to a packed RGB (alpha opaque). */
+        fun hsvToRgb(h: Float, s: Float, v: Float): Int {
+            val c = v * s
+            val hh = ((h % 360f + 360f) % 360f) / 60f
+            val x = c * (1f - Math.abs(hh % 2f - 1f))
+            val (r1, g1, b1) = when (hh.toInt()) {
+                0 -> Triple(c, x, 0f); 1 -> Triple(x, c, 0f); 2 -> Triple(0f, c, x)
+                3 -> Triple(0f, x, c); 4 -> Triple(x, 0f, c); else -> Triple(c, 0f, x)
+            }
+            val m = v - c
+            return Color.rgb(Math.round((r1 + m) * 255).coerceIn(0, 255), Math.round((g1 + m) * 255).coerceIn(0, 255), Math.round((b1 + m) * 255).coerceIn(0, 255))
+        }
+
+        /** The value of a six-sector table at a hue, interpolated linearly between sector centres. */
+        fun sectorValue(table: FloatArray, hue: Float): Float {
+            val pos = ((hue % 360f + 360f) % 360f) / 60f
+            val i = pos.toInt() % HUES
+            val t = pos - pos.toInt()
+            return table[i] * (1f - t) + table[(i + 1) % HUES] * t
+        }
 
         /**
          * Starting point for each film. Colour: measured on a real print (see the class comment).
@@ -90,23 +138,87 @@ class FilmModel(
             m.shadowWarmth = f("shadowWarmth", m.shadowWarmth); m.saturation = f("saturation", m.saturation)
             m.warmth = f("warmth", m.warmth); m.tint = f("tint", m.tint); m.blueDarkening = f("blueDarkening", m.blueDarkening)
             m.printSharpness = f("printSharpness", m.printSharpness)
+            for (i in 0 until HUES) { m.hueShift[i] = f("hueShift$i", 0f); m.hueGain[i] = f("hueGain$i", 1f); m.hueValue[i] = f("hueValue$i", 1f) }
             return m
         }
     }
 
     fun save(prefs: SharedPreferences) {
         val prefix = PREFIX + type.key + "."
-        prefs.edit()
+        val e = prefs.edit()
             .putFloat(prefix + "exposure", exposure).putFloat(prefix + "gamma", gamma)
             .putFloat(prefix + "blackClip", blackClip).putFloat(prefix + "whiteClip", whiteClip)
             .putFloat(prefix + "blackLevel", blackLevel).putFloat(prefix + "whiteLevel", whiteLevel)
             .putFloat(prefix + "shadowWarmth", shadowWarmth).putFloat(prefix + "saturation", saturation)
             .putFloat(prefix + "warmth", warmth).putFloat(prefix + "tint", tint).putFloat(prefix + "blueDarkening", blueDarkening)
             .putFloat(prefix + "printSharpness", printSharpness)
-            .apply()
+        for (i in 0 until HUES) e.putFloat(prefix + "hueShift$i", hueShift[i]).putFloat(prefix + "hueGain$i", hueGain[i]).putFloat(prefix + "hueValue$i", hueValue[i])
+        e.apply()
     }
 
-    fun copy() = FilmModel(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening, printSharpness)
+    fun copy() = FilmModel(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening, printSharpness, hueShift.clone(), hueGain.clone(), hueValue.clone())
+
+    /** Whether any per-hue correction is set. */
+    val hueCorrected: Boolean get() = hueShift.any { it != 0f } || hueGain.any { it != 1f } || hueValue.any { it != 1f }
+
+    fun resetHues() { hueShift.fill(0f); hueGain.fill(1f); hueValue.fill(1f) }
+
+    /** The brightness factor of a colour of saturation [s] at hue [h]: 1 for neutrals, the sector's value gain when fully saturated. */
+    private fun valueFactor(h: Float, s: Float): Float = 1f - (1f - sectorValue(hueValue, h)) * s
+
+    /**
+     * The input hue that the shift table maps onto [hOut]. The shifted hue is piecewise linear in
+     * the input hue, so each sector is solved exactly; when several sectors answer (a steep table),
+     * the one nearest to [hOut] wins.
+     */
+    fun inverseHue(hOut: Float): Float {
+        var best = hOut
+        var bestDist = Float.MAX_VALUE
+        for (i in 0 until HUES) {
+            val a = hueShift[i]
+            val b = hueShift[(i + 1) % HUES]
+            val slope = (b - a) / 60f
+            if (1f + slope <= 0.05f) continue
+            for (wrap in -1..1) {
+                val target = hOut + 360f * wrap
+                val h = (target - a + slope * 60f * i) / (1f + slope)
+                if (h < 60f * i - 0.01f || h >= 60f * (i + 1) + 0.01f) continue
+                var d = Math.abs(h - hOut) % 360f
+                if (d > 180f) d = 360f - d
+                if (d < bestDist) { bestDist = d; best = h }
+            }
+        }
+        return best
+    }
+
+    /**
+     * Per-hue correction on the input colours (before the global colour matrix): rotate each hue by
+     * the sector's shift, scale its saturation by the sector's gain, and scale its brightness by the
+     * sector's value gain in proportion to the saturation. The inverse solves the hue exactly and
+     * divides the saturation and brightness back; what the film cannot reach is clamped.
+     */
+    fun hueCorrect(pixels: IntArray, inverse: Boolean) {
+        if (type.monochrome || !hueCorrected) return
+        val hsv = FloatArray(3)
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            rgbToHsv((p shr 16) and 0xFF, (p shr 8) and 0xFF, p and 0xFF, hsv)
+            if (hsv[1] < 0.02f) continue
+            val h: Float
+            val s: Float
+            val v: Float
+            if (!inverse) {
+                h = hsv[0] + sectorValue(hueShift, hsv[0])
+                s = hsv[1] * sectorValue(hueGain, hsv[0])
+                v = hsv[2] * valueFactor(hsv[0], hsv[1])
+            } else {
+                h = inverseHue(hsv[0])
+                s = hsv[1] / sectorValue(hueGain, h).coerceAtLeast(0.2f)
+                v = hsv[2] / valueFactor(h, s.coerceIn(0f, 1f)).coerceAtLeast(0.2f)
+            }
+            pixels[i] = (p and 0xFF000000.toInt()) or (hsvToRgb(h, s.coerceIn(0f, 1f), v.coerceIn(0f, 1f)) and 0xFFFFFF)
+        }
+    }
 
     /** The colour part of the model: saturation (none at all on monochrome film) and grey balance. */
     fun colorMatrix(): ColorMatrix {
@@ -178,8 +290,9 @@ class FilmModel(
 
     fun inverseToneCurves(): Array<IntArray> = toneCurves().map { inverseToneCurve(it) }.toTypedArray()
 
-    /** Apply the model to pixels (display simulation): colours, blue darkening, then tones. */
+    /** Apply the model to pixels (display simulation): per-hue correction, colours, blue darkening, then tones. */
     fun simulate(pixels: IntArray) {
+        hueCorrect(pixels, inverse = false)
         applyMatrix(pixels, colorMatrix())
         darkenBlues(pixels, inverse = false)
         val c = toneCurves()
@@ -192,6 +305,7 @@ class FilmModel(
         Processing.applyCurves(pixels, c[0], c[1], c[2])
         darkenBlues(pixels, inverse = true)
         applyMatrix(pixels, inverseColorMatrix())
+        hueCorrect(pixels, inverse = true)
     }
 
     /**

@@ -72,6 +72,7 @@ class MainActivity : Activity() {
         private const val PREF_QUEUE = "queue"
         private const val PREF_COMPENSATE = "compensate"
         private const val PREF_FILM_TYPE = "filmType"
+        private const val PREF_SHOOT = "shootUri"
         private const val MENU_QUEUE = 7
         private const val MENU_CALIBRATE = 8
         private const val MENU_COMPENSATE = 9
@@ -126,6 +127,10 @@ class MainActivity : Activity() {
     private lateinit var measureResultBox: LinearLayout
     private lateinit var measureReport: TextView
     private lateinit var measureCompare: ImageView
+    private lateinit var measureColourBox: LinearLayout
+    private lateinit var measureColourReport: TextView
+    private lateinit var measureColourCompare: ImageView
+    private lateinit var hueReadout: TextView
     private var measuredFilm: FilmModel? = null
     private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
@@ -689,14 +694,20 @@ class MainActivity : Activity() {
         }
         if (requestCode == REQUEST_PICK_CHART && resultCode == RESULT_OK && data?.data != null) loadChartPhoto(data.data!!)
         if (requestCode == REQUEST_SHOOT_CHART) {
-            val uri = shootUri
+            // The camera app is heavy: this process is often killed meanwhile, so the pending
+            // entry is remembered in the preferences, not only in a field.
+            val uri = shootUri ?: prefs.getString(PREF_SHOOT, null)?.let { Uri.parse(it) }
             shootUri = null
+            prefs.edit().remove(PREF_SHOOT).apply()
+            journal("chart photo: result $resultCode, uri $uri")
             if (uri != null) {
                 if (resultCode == RESULT_OK) {
-                    contentResolver.update(uri, android.content.ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+                    runCatching { contentResolver.update(uri, android.content.ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null) }
+                        .onFailure { journal("chart photo: could not publish the entry: $it") }
+                    show(measureView)
                     loadChartPhoto(uri)
                 } else {
-                    contentResolver.delete(uri, null, null)
+                    runCatching { contentResolver.delete(uri, null, null) }
                 }
             }
         }
@@ -870,6 +881,20 @@ class MainActivity : Activity() {
         calSlider(s.calBlue, 0, 100, { Math.round(film.blueDarkening * 100f) }, colourOnly = true) { film.blueDarkening = it / 100f }
         calSlider(s.calPrintSharpness, 0, 100, { Math.round(film.printSharpness) }) { film.printSharpness = it.toFloat() }
         ui.space(root, 8)
+        val hueLabel = ui.text(s.calHues, 13f, alpha = 0.7f)
+        root.addView(hueLabel)
+        hueReadout = ui.text("", 13f)
+        root.addView(hueReadout)
+        val hueSpace = View(this)
+        root.addView(hueSpace, ViewGroup.LayoutParams(ui.match, ui.dp(6)))
+        val hueReset = ui.softButton(s.calHuesReset) {
+            film.resetHues()
+            onFilmChanged()
+            toast(s.calHuesCleared)
+        }
+        root.addView(hueReset, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        colourOnlyCal += hueLabel; colourOnlyCal += hueReadout; colourOnlyCal += hueSpace; colourOnlyCal += hueReset
+        ui.space(root, 8)
         root.addView(ui.softButton(s.calReset) {
             film = FilmModel.defaults(filmType)
             film.save(prefs)
@@ -888,6 +913,7 @@ class MainActivity : Activity() {
 
     private fun syncCalibration() {
         for ((bar, read) in calBars) bar.progress = read()
+        hueReadout.text = describeHues(film)
     }
 
     private fun onFilmChanged() {
@@ -948,6 +974,23 @@ class MainActivity : Activity() {
             clipToOutline = true
         }
         measureResultBox.addView(measureCompare, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        measureColourBox = ui.column()
+        ui.space(measureColourBox, 12)
+        measureColourReport = ui.text("", 13f, alpha = 0.7f)
+        measureColourBox.addView(measureColourReport)
+        ui.space(measureColourBox, 8)
+        measureColourCompare = object : ImageView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val w = MeasureSpec.getSize(widthMeasureSpec)
+                setMeasuredDimension(w, w * 2 / 16)
+            }
+        }.apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            background = ui.rounded(Ui.CARD, 12)
+            clipToOutline = true
+        }
+        measureColourBox.addView(measureColourCompare, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        measureResultBox.addView(measureColourBox, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(measureResultBox, 12)
         measureResultBox.addView(ui.primaryButton(s.measureApply) { applyMeasured() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         root.addView(measureResultBox, LinearLayout.LayoutParams(ui.match, ui.wrap))
@@ -992,6 +1035,7 @@ class MainActivity : Activity() {
             contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
         } catch (e: Exception) { null } ?: return message(s.measureFailed.format("MediaStore"))
         shootUri = uri
+        prefs.edit().putString(PREF_SHOOT, uri.toString()).apply()
         val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
             .putExtra(MediaStore.EXTRA_OUTPUT, uri)
             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -999,6 +1043,7 @@ class MainActivity : Activity() {
             startActivityForResult(intent, REQUEST_SHOOT_CHART)
         } catch (e: Exception) {
             shootUri = null
+            prefs.edit().remove(PREF_SHOOT).apply()
             contentResolver.delete(uri, null, null)
             message(s.measureFailed.format(e.message ?: e.javaClass.simpleName))
         }
@@ -1027,17 +1072,24 @@ class MainActivity : Activity() {
         Thread {
             val result = runCatching {
                 val reading = ChartReader.read(photo, corners, type)
-                val (model, report) = ChartReader.fit(reading, type)
-                Triple(reading, model, report)
+                reading to ChartReader.fit(reading, type)
             }
             mainHandler.post {
                 setBusy(false)
-                result.onSuccess { (reading, model, report) ->
+                result.onSuccess { (reading, fit) ->
+                    val model = fit.model
                     measuredFilm = model
-                    measureReport.text = s.measureResult.format(report)
+                    measureReport.text = s.measureResult.format("%.1f %%".format(fit.greyRms))
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
+                    val colour = !type.monochrome && reading.patches.isNotEmpty()
+                    measureColourBox.visibility = if (colour) View.VISIBLE else View.GONE
+                    if (colour) {
+                        measureColourReport.text = s.measureColours.format("%.1f %%".format(fit.colourRmsBefore), "%.1f %%".format(fit.colourRmsAfter), describeHues(model))
+                        measureColourCompare.setImageBitmap(patchStrip(reading, model))
+                    }
                     measureResultBox.visibility = View.VISIBLE
-                    journal("chart measured: $report, paper white ${reading.paperWhite.joinToString { Math.round(it).toString() }}")
+                    journal("chart measured: greys %.1f %%, colours %.1f -> %.1f %%, hues %s, paper white %s".format(
+                        fit.greyRms, fit.colourRmsBefore, fit.colourRmsAfter, describeHues(model), reading.paperWhite.joinToString { Math.round(it).toString() }))
                 }.onFailure { message(s.measureFailed.format(it.message ?: it.javaClass.simpleName)) }
             }
         }.start()
@@ -1061,6 +1113,33 @@ class MainActivity : Activity() {
             canvas.drawRect(i * cell.toFloat(), cell.toFloat(), (i + 1) * cell.toFloat(), 2 * cell.toFloat(), paint)
         }
         return bitmap
+    }
+
+    /** Two rows of the 16 colour patches: measured on the print above, simulated by the fitted model below. */
+    private fun patchStrip(reading: ChartReader.Reading, model: FilmModel): Bitmap {
+        val n = reading.patches.size
+        val cell = 40
+        val bitmap = Bitmap.createBitmap(n * cell, 2 * cell, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint()
+        for (i in 0 until n) {
+            val g = reading.patches[i]
+            paint.color = Color.rgb(Math.round(g[0].coerceIn(0f, 1f) * 255), Math.round(g[1].coerceIn(0f, 1f) * 255), Math.round(g[2].coerceIn(0f, 1f) * 255))
+            canvas.drawRect(i * cell.toFloat(), 0f, (i + 1) * cell.toFloat(), cell.toFloat(), paint)
+            val px = intArrayOf(TestChart.patches[i])
+            model.simulate(px)
+            paint.color = px[0]
+            canvas.drawRect(i * cell.toFloat(), cell.toFloat(), (i + 1) * cell.toFloat(), 2 * cell.toFloat(), paint)
+        }
+        return bitmap
+    }
+
+    /** The hue tables, one sector per line: hue shift, saturation gain, brightness gain; or "none". */
+    private fun describeHues(model: FilmModel): String {
+        if (!model.hueCorrected) return s.calHuesNone
+        return (0 until FilmModel.HUES).joinToString("\n") { k ->
+            "%s  %+.0f°   %s ×%.2f   %s ×%.2f".format(FilmModel.HUE_NAMES[k], model.hueShift[k], s.calHueSat, model.hueGain[k], s.calHueLum, model.hueValue[k])
+        }
     }
 
     private fun applyMeasured() {

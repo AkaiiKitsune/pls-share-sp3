@@ -31,6 +31,11 @@ class CornerPickView(context: Context) : View(context) {
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 13f * density; textAlign = Paint.Align.CENTER; setShadowLayer(4f, 0f, 0f, Color.BLACK) }
     private val dest = RectF()
     private var dragging = -1
+    private val loupeRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * context.resources.displayMetrics.density; color = Color.WHITE }
+    private val loupeShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x80000000.toInt() }
+    private val crossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.5f * context.resources.displayMetrics.density; color = Ui.accent(context) }
+    private val loupePath = Path()
+    private val loupeZoom = 3f
 
     val complete: Boolean get() = corners.size == 4
 
@@ -102,5 +107,39 @@ class CornerPickView(context: Context) : View(context) {
             canvas.drawCircle(v[0], v[1], radius, markerRing)
             canvas.drawText(labels[i], v[0], v[1] - radius - 6f * density, labelPaint)
         }
+        if (dragging >= 0) drawLoupe(canvas, toView(corners[dragging]))
+    }
+
+    /**
+     * A magnified view of what is under the finger, drawn in a corner of the view away from it:
+     * the top corner on the opposite side, or the bottom one when the finger is near the top.
+     */
+    private fun drawLoupe(canvas: Canvas, at: FloatArray) {
+        val r = 56f * density
+        val pad = 8f * density
+        val cx = if (at[0] < width / 2f) width - r - pad else r + pad
+        val cy = if (at[1] < 2 * r + 2 * pad) height - r - pad else r + pad
+        loupePath.reset()
+        loupePath.addCircle(cx, cy, r, Path.Direction.CW)
+        canvas.drawCircle(cx + 2f * density, cy + 3f * density, r + 2f * density, loupeShadow)
+        canvas.save()
+        canvas.clipPath(loupePath)
+        canvas.translate(cx, cy)
+        canvas.scale(loupeZoom, loupeZoom)
+        canvas.translate(-at[0], -at[1])
+        canvas.drawBitmap(bitmap!!, null, dest, photoPaint)
+        // The quad's edges, so the user sees where the line will run.
+        if (corners.size >= 2) {
+            val path = Path()
+            corners.forEachIndexed { i, c -> val v = toView(c); if (i == 0) path.moveTo(v[0], v[1]) else path.lineTo(v[0], v[1]) }
+            if (corners.size == 4) path.close()
+            canvas.drawPath(path, Paint(linePaint).apply { strokeWidth = linePaint.strokeWidth / loupeZoom })
+        }
+        canvas.restore()
+        canvas.drawLine(cx - r * 0.5f, cy, cx - 4f * density, cy, crossPaint)
+        canvas.drawLine(cx + 4f * density, cy, cx + r * 0.5f, cy, crossPaint)
+        canvas.drawLine(cx, cy - r * 0.5f, cx, cy - 4f * density, crossPaint)
+        canvas.drawLine(cx, cy + 4f * density, cx, cy + r * 0.5f, crossPaint)
+        canvas.drawCircle(cx, cy, r, loupeRing)
     }
 }

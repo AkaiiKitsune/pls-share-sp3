@@ -14,6 +14,7 @@ import android.graphics.Color
  */
 object ChartReader {
     const val SIZE = 400
+    private const val PASSES = 8
 
     class Reading(
         /** Normalised RGB (0..1 of paper white) of the 11 grey steps, 0 % to 100 %. */
@@ -162,11 +163,85 @@ object ChartReader {
 
     private fun luma(c: FloatArray) = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]
 
+    /** A fitted model with its errors, in percent of paper white (RMS over the steps or patches, per channel). */
+    class Fit(val model: FilmModel, val greyRms: Double, val colourRmsBefore: Double, val colourRmsAfter: Double) {
+        operator fun component1() = model
+        operator fun component2() = report
+        val report: String get() = "RMS %.1f %%".format(greyRms)
+    }
+
+    /** RMS distance, in percent, between the patches as the model simulates them and as measured. */
+    private fun colourRms(m: FilmModel, reading: Reading): Double {
+        if (reading.patches.size != TestChart.patches.size) return 0.0
+        var err = 0.0
+        for ((i, src) in TestChart.patches.withIndex()) {
+            val px = intArrayOf(src)
+            m.simulate(px)
+            val meas = reading.patches[i]
+            val dr = Color.red(px[0]) / 255.0 - meas[0]
+            val dg = Color.green(px[0]) / 255.0 - meas[1]
+            val db = Color.blue(px[0]) / 255.0 - meas[2]
+            err += (dr * dr + dg * dg + db * db) / 3
+        }
+        return Math.sqrt(err / TestChart.patches.size) * 100
+    }
+
     /**
-     * Fit the film model to a reading. Returns the model and a short report of the fit
-     * (RMS error on the grey steps, in percent of paper white).
+     * Fit the six-sector hue tables: for each patch, the hue rotation, the saturation ratio and the
+     * brightness ratio between the measured colour and the model's prediction, accumulated into the
+     * two sectors around the patch's source hue, weighted by its chroma. Several passes, since the
+     * correction is applied at the input and the tone curves bend it.
      */
-    fun fit(reading: Reading, type: FilmType): Pair<FilmModel, String> {
+    private fun fitHues(m: FilmModel, reading: Reading) {
+        m.resetHues()
+        val hsvP = FloatArray(3); val hsvM = FloatArray(3); val hsvS = FloatArray(3)
+        repeat(PASSES) {
+            val shiftSum = FloatArray(FilmModel.HUES); val gainSum = FloatArray(FilmModel.HUES); val valueSum = FloatArray(FilmModel.HUES); val weight = FloatArray(FilmModel.HUES)
+            for ((i, src) in TestChart.patches.withIndex()) {
+                val px = intArrayOf(src)
+                m.simulate(px)
+                FilmModel.rgbToHsv(Color.red(px[0]), Color.green(px[0]), Color.blue(px[0]), hsvP)
+                val meas = reading.patches[i]
+                FilmModel.rgbToHsv(Math.round(meas[0].coerceIn(0f, 1f) * 255), Math.round(meas[1].coerceIn(0f, 1f) * 255), Math.round(meas[2].coerceIn(0f, 1f) * 255), hsvM)
+                FilmModel.rgbToHsv(Color.red(src), Color.green(src), Color.blue(src), hsvS)
+                // Neutral or near-neutral patches say nothing reliable about hue.
+                if (hsvS[1] < 0.25f || hsvP[1] < 0.08f || hsvM[1] < 0.05f) continue
+                var dh = hsvM[0] - hsvP[0]
+                if (dh > 180f) dh -= 360f
+                if (dh < -180f) dh += 360f
+                val logGain = Math.log((hsvM[1] / hsvP[1]).toDouble()).toFloat()
+                // Brightness: the ratio is attributed to the hue in proportion to the source saturation.
+                val ratio = (hsvM[2] / hsvP[2].coerceAtLeast(0.05f)).coerceIn(0.2f, 2f)
+                val logValue = Math.log((1f - (1f - ratio) / hsvS[1]).coerceIn(0.25f, 2f).toDouble()).toFloat()
+                val w = minOf(hsvP[1], hsvM[1]) * minOf(hsvP[2], hsvM[2])
+                val pos = hsvS[0] / 60f
+                val i0 = pos.toInt() % FilmModel.HUES
+                val i1 = (i0 + 1) % FilmModel.HUES
+                val t = pos - pos.toInt()
+                for ((k, wk) in listOf(i0 to w * (1f - t), i1 to w * t)) {
+                    shiftSum[k] += dh * wk; gainSum[k] += logGain * wk; valueSum[k] += logValue * wk; weight[k] += wk
+                }
+            }
+            for (k in 0 until FilmModel.HUES) {
+                if (weight[k] < 0.05f) continue
+                m.hueShift[k] = (m.hueShift[k] + shiftSum[k] / weight[k]).coerceIn(-40f, 40f)
+                m.hueGain[k] = (m.hueGain[k] * Math.exp((gainSum[k] / weight[k]).toDouble()).toFloat()).coerceIn(0.4f, 1.8f)
+                m.hueValue[k] = (m.hueValue[k] * Math.exp((valueSum[k] / weight[k]).toDouble()).toFloat()).coerceIn(0.3f, 1.5f)
+            }
+        }
+        // The gains express deviations from the global saturation: fold their common part into it.
+        val mean = Math.exp(m.hueGain.sumOf { Math.log(it.toDouble()) } / FilmModel.HUES).toFloat()
+        if (mean > 0.5f && mean < 2f) {
+            m.saturation = (m.saturation * mean).coerceIn(0.4f, 1.5f)
+            for (k in 0 until FilmModel.HUES) m.hueGain[k] = (m.hueGain[k] / mean).coerceIn(0.4f, 1.8f)
+        }
+    }
+
+    /**
+     * Fit the film model to a reading: tones from the grey steps, then the global colour terms,
+     * then the per-hue table from the colour patches.
+     */
+    fun fit(reading: Reading, type: FilmType): Fit {
         val m = FilmModel.defaults(type)
         val g = reading.greys.map { luma(it) }
         val n = g.size
@@ -241,7 +316,19 @@ object ChartReader {
             val pl = (0.299 * Color.red(px[0]) + 0.587 * Color.green(px[0]) + 0.114 * Color.blue(px[0])) / 255.0
             err += (pl - g[i]) * (pl - g[i])
         }
-        val rms = Math.sqrt(err / n) * 100
-        return m to "RMS %.1f %%".format(rms)
+        val greyRms = Math.sqrt(err / n) * 100
+
+        val colourBefore = colourRms(m, reading)
+        var colourAfter = colourBefore
+        if (!type.monochrome && reading.patches.size == 16) {
+            // The hue tables cover what the blue-darkening term did, so it is dropped while they are fitted.
+            val blue = m.blueDarkening
+            m.blueDarkening = 0f
+            fitHues(m, reading)
+            colourAfter = colourRms(m, reading)
+            // Keep the tables only if they actually help.
+            if (colourAfter >= colourBefore) { m.resetHues(); m.blueDarkening = blue; colourAfter = colourBefore }
+        }
+        return Fit(m, greyRms, colourBefore, colourAfter)
     }
 }

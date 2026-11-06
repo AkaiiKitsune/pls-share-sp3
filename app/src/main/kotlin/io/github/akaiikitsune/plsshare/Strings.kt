@@ -213,6 +213,16 @@ class Strings private constructor(private val fr: Boolean) {
     val measureReset get() = t("Recommencer", "Start over")
     val measureRun get() = t("Mesurer", "Measure")
     val measureResult get() = t("Résultat : %s. En haut les gris mesurés sur le tirage, en bas ceux que simule le nouveau modèle.", "Result: %s. Top: the greys measured on the print; bottom: the greys the new model simulates.")
+    val measureColours get() = t(
+        "Couleurs : erreur %s avec les réglages globaux, %s après correction par teinte. En haut les patches mesurés, en bas ceux que simule le nouveau modèle.\n%s",
+        "Colours: error %s with the global settings, %s after the per-hue correction. Top: the patches measured on the print; bottom: the patches the new model simulates.\n%s",
+    )
+    val calHues get() = t("Correction par teinte (mesurée sur une photo de la mire)", "Per-hue correction (measured from a photo of the chart)")
+    val calHuesNone get() = t("aucune", "none")
+    val calHueSat get() = t("sat.", "sat.")
+    val calHueLum get() = t("lum.", "lum.")
+    val calHuesReset get() = t("Neutraliser les teintes", "Clear the hue correction")
+    val calHuesCleared get() = t("Correction par teinte retirée.", "Hue correction cleared.")
     val measureApply get() = t("Appliquer ces valeurs", "Apply these values")
     val measureApplied get() = t("Calibration mesurée appliquée.", "Measured calibration applied.")
     val measureFailed get() = t("Mesure impossible : %s", "Could not measure: %s")
