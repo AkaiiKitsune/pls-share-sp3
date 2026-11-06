@@ -980,8 +980,20 @@ class MainActivity : Activity() {
 
     private fun printChart() {
         if (connected == null) return message(s.notConnectedYet)
-        val file = Jobs.save(Jobs.queueDir(this), TestChart.render(PREVIEW_SIZE, filmType))
-        startPrinting(listOf(file), archive = false)
+        if (printing.get()) return message(s.busy)
+        val film = connected?.filmRemaining ?: 0
+        if (film == 0) return message(s.noFilm)
+        // One sheet of film: ask first, then follow the print on the home screen.
+        AlertDialog.Builder(this)
+            .setMessage(s.printChartConfirm.format(film))
+            .setNegativeButton(s.cancel, null)
+            .setPositiveButton(s.printChart) { _, _ ->
+                val file = Jobs.save(Jobs.queueDir(this), TestChart.render(PREVIEW_SIZE, filmType))
+                show(homeView)
+                startPrinting(listOf(file), archive = false)
+                toast(s.printChartStarted)
+            }
+            .show()
     }
 
     // ---------------------------------------------------------------- Chart measurement

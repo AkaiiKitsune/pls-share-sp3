@@ -193,6 +193,8 @@ class Strings private constructor(private val fr: Boolean) {
     val calibrateHelp get() = t("Comment ça marche ?", "How does it work?")
     val chartSimulated get() = t("Mire simulée (ce que le tirage devrait montrer)", "Simulated chart (what the print should look like)")
     val printChart get() = t("Imprimer la mire", "Print the chart")
+    val printChartConfirm get() = t("Imprimer la mire maintenant ? Cela consomme une pose (il en reste %d). Le tirage se suit sur l'accueil.", "Print the chart now? It uses one sheet (%d left). The print is followed on the home screen.")
+    val printChartStarted get() = t("Impression de la mire lancée.", "Chart print started.")
     val printChartTip get() = t("La mire s'imprime toujours sans compensation.", "The chart always prints without compensation.")
     val calExposure get() = t("Exposition (centièmes d'IL)", "Exposure (hundredths of a stop)")
     val calGamma get() = t("Demi-tons (gamma ×100 : < 100 éclaircit)", "Midtones (gamma ×100: < 100 lifts)")
