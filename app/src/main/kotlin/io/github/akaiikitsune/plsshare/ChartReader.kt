@@ -29,7 +29,12 @@ object ChartReader {
         val paperWhite: FloatArray,
         /** The warped chart, for display. */
         val warped: Bitmap,
+        /** Normalised RGB along the continuous gradient, [GRADIENT_SAMPLES] values from black to white (empty on old readings). */
+        val gradient: List<FloatArray> = emptyList(),
     )
+
+    /** How many samples are read along the gradient. */
+    const val GRADIENT_SAMPLES = 48
 
     /** Solve the homography that maps the unit square to the four corners (TL, TR, BR, BL). */
     fun homography(corners: FloatArray): DoubleArray {
@@ -168,6 +173,14 @@ object ChartReader {
         val whiteRect = doubleArrayOf(0.6, (margin + stepH + 0.005f).toDouble(), 0.95, (margin + stepH + 0.03f).toDouble())
         val printedWhite = norm(average(pixels, width, height, h, whiteRect[0], whiteRect[1], whiteRect[2], whiteRect[3], 5), whiteRect)
 
+        // The gradient: black at the left to white at the right, linear in the file's levels, over
+        // the middle half of its height, in bins across its width.
+        val gradient = (0 until GRADIENT_SAMPLES).map { i ->
+            val l = margin + innerW * i / GRADIENT_SAMPLES
+            val rect = inner(l, GRADIENT_TOP, l + innerW / GRADIENT_SAMPLES, 1f - margin, 0.5f)
+            norm(average(pixels, width, height, h, rect[0], rect[1], rect[2], rect[3], 7), rect)
+        }
+
         val warped = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
         val out = IntArray(SIZE * SIZE)
         for (y in 0 until SIZE) for (x in 0 until SIZE) {
@@ -175,7 +188,7 @@ object ChartReader {
             out[y * SIZE + x] = sample(pixels, width, height, p[0], p[1])
         }
         warped.setPixels(out, 0, SIZE, 0, 0, SIZE, SIZE)
-        return Reading(greys, patches, printedWhite, paper, warped)
+        return Reading(greys, patches, printedWhite, paper, warped, gradient)
     }
 
     private fun luma(c: FloatArray) = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]
@@ -196,14 +209,23 @@ object ChartReader {
         return Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888).apply { setPixels(px, 0, SIZE, 0, 0, SIZE, SIZE) }
     }
 
-    /** The mean of several readings of the same chart (different photos, lights or angles). */
+    /**
+     * One reading out of several of the same chart (different photos, lights or angles): the
+     * median of each value from three photos on, so that a glint, a speck of dust or a shadow on
+     * one photo does not count; the mean of two.
+     */
     fun average(readings: List<Reading>): Reading {
         require(readings.isNotEmpty())
         if (readings.size == 1) return readings[0]
-        fun mean(lists: List<FloatArray>): FloatArray = FloatArray(3) { c -> lists.map { it[c] }.average().toFloat() }
-        val greys = readings[0].greys.indices.map { i -> mean(readings.map { it.greys[i] }) }
-        val patches = readings[0].patches.indices.map { i -> mean(readings.map { it.patches[i] }) }
-        return Reading(greys, patches, mean(readings.map { it.printedWhite }), mean(readings.map { it.paperWhite }), readings[0].warped)
+        fun combine(lists: List<FloatArray>): FloatArray = FloatArray(3) { c ->
+            val v = lists.map { it[c] }.sorted()
+            if (v.size >= 3) v[v.size / 2] else v.average().toFloat()
+        }
+        val greys = readings[0].greys.indices.map { i -> combine(readings.map { it.greys[i] }) }
+        val patches = readings[0].patches.indices.map { i -> combine(readings.map { it.patches[i] }) }
+        val n = readings.minOf { it.gradient.size }
+        val gradient = (0 until n).map { i -> combine(readings.map { it.gradient[i] }) }
+        return Reading(greys, patches, combine(readings.map { it.printedWhite }), combine(readings.map { it.paperWhite }), readings[0].warped, gradient)
     }
 
     /**
@@ -1059,26 +1081,52 @@ object ChartReader {
         val m = FilmModel.defaults(type)
         val g = reading.greys.map { luma(it) }
         val n = g.size
+        // The tone curve: from the continuous gradient when it was read (dense: the plateaus'
+        // ends and the midtone curve come out at a fraction of a step), else from the 11 steps.
         val black = g.take(3).minOrNull() ?: 0f
         val white = g.takeLast(3).maxOrNull() ?: 1f
+        // The gradient is used only when it agrees with the steps (same print, so the same black
+        // and white within a tenth): on old prints the frame hid its bottom, and the camera's own
+        // tone mapping can treat the two differently.
+        val gradientOk = reading.gradient.size >= 16 && reading.gradient.map { luma(it) }.let { gl ->
+            val lo = gl.take(gl.size / 8).sorted()[gl.size / 16]; val hi = gl.takeLast(gl.size / 8).sorted().let { it[it.size - 1 - gl.size / 16] }
+            Math.abs(lo - black) < 0.1f && Math.abs(hi - white) < 0.1f && (1 until gl.size).count { gl[it] < gl[it - 1] - 0.03f } <= gl.size / 10
+        }
+        val dense = gradientOk
+        val tones: List<Pair<Float, Float>> = if (dense) {
+            // The gradient's bins: level v at the bin's centre, lightly smoothed over three bins against the printer's dither.
+            val gl = reading.gradient.map { luma(it) }
+            gl.indices.map { i ->
+                val v = (i + 0.5f) / gl.size
+                val t = ((if (i > 0) gl[i - 1] else gl[i]) + gl[i] + (if (i < gl.size - 1) gl[i + 1] else gl[i])) / 3f
+                v to t
+            }
+        } else g.indices.map { i -> i.toFloat() / (n - 1) to g[i] }
+        // The black and white levels come from the steps, flat patches like any area of a photo.
+        // The gradient only gives the curve's shape: where its plateaus end and how the midtones
+        // run between them, relative to its own black and white (the light's unevenness between
+        // the top of the print and its bottom shifts the gradient's levels against the steps' by
+        // a few percent, which the shape does not see).
         m.blackLevel = black.coerceIn(0f, 0.4f)
         m.whiteLevel = white.coerceIn(0.7f, 1f)
-        // Clips: the first / last input step whose value leaves the plateau.
-        val tol = 0.03f
+        val lowT = if (dense) tones.take(tones.size / 8).map { it.second }.sorted()[tones.size / 16] else black
+        val highT = if (dense) tones.takeLast(tones.size / 8).map { it.second }.sorted().let { it[it.size - 1 - tones.size / 16] } else white
+        // Clips: the first / last level whose value leaves the plateau.
+        val tol = if (dense) 0.02f else 0.03f
         var lastBlack = 0
-        for (i in 0 until n) if (g[i] - black <= tol) lastBlack = i else break
-        var firstWhite = n - 1
-        for (i in n - 1 downTo 0) if (white - g[i] <= tol) firstWhite = i else break
-        // The plateau ends somewhere between the last flat step and the next: take the midpoint.
-        m.blackClip = ((lastBlack + 0.5f) / (n - 1)).coerceIn(0f, 0.3f)
-        m.whiteClip = ((firstWhite - 0.5f) / (n - 1)).coerceIn(0.7f, 1f)
+        for (i in tones.indices) if (tones[i].second - lowT <= tol) lastBlack = i else break
+        var firstWhite = tones.size - 1
+        for (i in tones.indices.reversed()) if (highT - tones[i].second <= tol) firstWhite = i else break
+        // The plateau ends somewhere between the last flat sample and the next: take the midpoint.
+        val step = if (dense) 1f / tones.size else 1f / (n - 1)
+        m.blackClip = (tones[lastBlack].first + step / 2).coerceIn(0f, 0.3f)
+        m.whiteClip = (tones[firstWhite].first - step / 2).coerceIn(0.7f, 1f)
         m.exposure = 0f
-        // Gamma on the interior steps: t = u^gamma.
+        // Gamma on the interior samples: t = u^gamma.
         val gammas = ArrayList<Double>()
-        for (i in 0 until n) {
-            val v = i.toFloat() / (n - 1)
+        for ((v, value) in tones) {
             val u = (v - m.blackClip) / (m.whiteClip - m.blackClip)
-            val t = (g[i] - black) / (white - black)
+            val t = (value - lowT) / (highT - lowT)
             if (u > 0.08f && u < 0.92f && t > 0.03f && t < 0.97f) gammas += Math.log(t.toDouble()) / Math.log(u.toDouble())
         }
         m.gamma = (if (gammas.isEmpty()) 0.62 else gammas.sorted()[gammas.size / 2]).toFloat().coerceIn(0.3f, 2f)
@@ -1135,14 +1183,111 @@ object ChartReader {
         val colourBefore = colourRms(m, reading)
         var colourAfter = colourBefore
         if (!type.monochrome && reading.patches.size == 16) {
-            // The hue tables cover what the blue-darkening term did, so it is dropped while they are fitted.
+            // The crosstalk matrix, then the hue tables on what it leaves, cover what the
+            // blue-darkening term did, so it is dropped while they are fitted; each step is kept
+            // only if it actually helps.
             val blue = m.blueDarkening
             m.blueDarkening = 0f
+            fitCrosstalk(m, reading)
+            var best = colourRms(m, reading)
+            if (best >= colourBefore) { m.resetCrosstalk(); best = colourBefore }
+            val withMatrix = m.crosstalk.clone()
             fitHues(m, reading)
             colourAfter = colourRms(m, reading)
-            // Keep the tables only if they actually help.
-            if (colourAfter >= colourBefore) { m.resetHues(); m.blueDarkening = blue; colourAfter = colourBefore }
+            if (colourAfter >= best) { m.resetHues(); withMatrix.copyInto(m.crosstalk); colourAfter = best }
+            if (!m.colourMeasured) m.blueDarkening = blue
         }
         return Fit(m, greyRms, colourBefore, colourAfter)
+    }
+
+    /**
+     * Fit the crosstalk matrix on the 16 patches: for each patch, what enters the matrix (the
+     * source through the global colour terms) and what should leave it (the measured colour
+     * through the inverse tone curves, channels at the film's white left out since their level
+     * is unknown). Each row keeps its sum at one, so only two of its terms are free: least
+     * squares per row, with a ridge pulling towards the identity.
+     */
+    private fun fitCrosstalk(m: FilmModel, reading: Reading) {
+        m.resetCrosstalk()
+        m.resetHues()
+        val base = m.baseColorMatrix().array
+        // The inverse tone curve of each channel as the print itself shows it, on the grey steps:
+        // a neutral input passes the matrix unchanged (rows sum to one), so a channel's reading
+        // on the steps is its tone curve alone, measured under the same light as the patches.
+        // Monotonic by construction (running maximum), interpolated between steps.
+        val n = reading.greys.size
+        val curves = Array(3) { c -> FloatArray(n).also { v -> var top = 0f; for (i in 0 until n) { top = Math.max(top, reading.greys[i][c]); v[i] = top } } }
+        fun inverse(c: Int, value: Float): Float? {
+            val curve = curves[c]
+            if (value >= curve[n - 1] - 0.01f) return null // at the film's white or beyond: level unknown
+            if (value <= curve[0]) return 0f
+            var i = 0
+            while (i < n - 2 && curve[i + 1] < value) i++
+            val span = curve[i + 1] - curve[i]
+            val t = if (span <= 1e-4f) 0f else (value - curve[i]) / span
+            return (i + t) * 255f / (n - 1)
+        }
+        val xs = ArrayList<FloatArray>(); val ys = ArrayList<FloatArray>(); val ok = ArrayList<BooleanArray>()
+        for ((i, src) in TestChart.patches.withIndex()) {
+            val r = Color.red(src).toFloat(); val g = Color.green(src).toFloat(); val b = Color.blue(src).toFloat()
+            xs += floatArrayOf(base[0] * r + base[1] * g + base[2] * b, base[5] * r + base[6] * g + base[7] * b, base[10] * r + base[11] * g + base[12] * b)
+            val meas = reading.patches[i]
+            val y = FloatArray(3); val usable = BooleanArray(3)
+            for (c in 0 until 3) {
+                val level = inverse(c, meas[c])
+                usable[c] = level != null
+                y[c] = level ?: 0f
+            }
+            ys += y; ok += usable
+        }
+        val out = FloatModelCrosstalk.fit(xs, ys, ok)
+        if (out != null) out.copyInto(m.crosstalk)
+    }
+
+
+    /** Row-wise least squares for the crosstalk matrix. */
+    private object FloatModelCrosstalk {
+        /**
+         * For each output channel r: y_r = a x_r + b x_p + c x_q over the usable patches, solved
+         * for the three terms with a ridge (a tenth of the diagonal of the normal matrix) pulling
+         * the two off-diagonal ones towards zero, then the row scaled to sum one: a gain common to
+         * the row (a tone curve fitted a little off on that channel) is thereby ignored, and only
+         * the mixing is kept. Null when a row has too few patches, or the result is not a mild
+         * mixing (terms beyond ±0.5).
+         */
+        fun fit(xs: List<FloatArray>, ys: List<FloatArray>, ok: List<BooleanArray>): FloatArray? {
+            val out = FilmModel.IDENTITY.clone()
+            for (r in 0 until 3) {
+                val p = (r + 1) % 3; val q = (r + 2) % 3
+                val a = Array(3) { DoubleArray(4) }
+                var n = 0
+                for (i in xs.indices) {
+                    if (!ok[i][r]) continue
+                    val v = doubleArrayOf(xs[i][r].toDouble(), xs[i][p].toDouble(), xs[i][q].toDouble())
+                    val t = ys[i][r].toDouble()
+                    for (j in 0 until 3) { for (k in 0 until 3) a[j][k] += v[j] * v[k]; a[j][3] += v[j] * t }
+                    n++
+                }
+                if (n < 6) return null
+                val ridge = 0.1 * (a[0][0] + a[1][1] + a[2][2]) / 3
+                a[1][1] += ridge; a[2][2] += ridge
+                // Gaussian elimination on the 3×4 system.
+                for (col in 0 until 3) {
+                    var pivot = col
+                    for (row in col + 1 until 3) if (Math.abs(a[row][col]) > Math.abs(a[pivot][col])) pivot = row
+                    val tmp = a[col]; a[col] = a[pivot]; a[pivot] = tmp
+                    val pv = a[col][col]
+                    if (Math.abs(pv) < 1e-9) return null
+                    for (k in col until 4) a[col][k] /= pv
+                    for (row in 0 until 3) if (row != col) { val f = a[row][col]; if (f != 0.0) for (k in col until 4) a[row][k] -= f * a[col][k] }
+                }
+                val sum = a[0][3] + a[1][3] + a[2][3]
+                if (sum < 0.5 || sum > 2.0) return null
+                val ca = a[0][3] / sum; val cp = a[1][3] / sum; val cq = a[2][3] / sum
+                if (Math.abs(cp) > 0.5 || Math.abs(cq) > 0.5) return null
+                out[3 * r + r] = ca.toFloat(); out[3 * r + p] = cp.toFloat(); out[3 * r + q] = cq.toFloat()
+            }
+            return out
+        }
     }
 }

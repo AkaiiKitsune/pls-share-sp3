@@ -26,10 +26,16 @@ import java.util.Date
 
 /** The hue tables, one sector per line: hue shift, saturation gain, brightness gain; or "none". */
 internal fun describeHues(s: Strings, model: FilmModel): String {
-    if (!model.hueCorrected) return s.calHuesNone
-    return (0 until FilmModel.HUES).joinToString("\n") { k ->
-        "%s  %+.0f°   %s ×%.2f   %s ×%.2f".format(FilmModel.HUE_NAMES[k], model.hueShift[k], s.calHueSat, model.hueGain[k], s.calHueLum, model.hueValue[k])
+    if (!model.colourMeasured) return s.calHuesNone
+    val lines = ArrayList<String>()
+    if (model.crosstalkSet) {
+        val c = model.crosstalk
+        lines += s.calCrosstalk.format(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8])
     }
+    if (model.hueCorrected) for (k in 0 until FilmModel.HUES) {
+        lines += "%s  %+.0f°   %s ×%.2f   %s ×%.2f".format(FilmModel.HUE_NAMES[k], model.hueShift[k], s.calHueSat, model.hueGain[k], s.calHueLum, model.hueValue[k])
+    }
+    return lines.joinToString("\n")
 }
 
 /** The printer's geometry in a sentence, or "not measured". */

@@ -72,11 +72,19 @@ class FilmModel(
     var hueShift: FloatArray = FloatArray(HUES),
     var hueGain: FloatArray = FloatArray(HUES) { 1f },
     var hueValue: FloatArray = FloatArray(HUES) { 1f },
+    /**
+     * Colour crosstalk of the film, a 3×3 matrix (row-major: the output red is the first row times
+     * the input RGB) applied after the global saturation and grey balance, before the tone curves.
+     * Each row sums to one, so greys pass through untouched. Only measured from the chart's
+     * patches, never set by hand; the identity until then.
+     */
+    var crosstalk: FloatArray = IDENTITY.clone(),
 ) {
     companion object {
         private const val PREFIX = "film3."
         const val HUES = 6
         val HUE_NAMES = listOf("R", "Y", "G", "C", "B", "M")
+        val IDENTITY = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
 
         /** RGB (0..255) to hue (0..360), saturation and value (0..1), into [out]. */
         fun rgbToHsv(r: Int, g: Int, b: Int, out: FloatArray) {
@@ -169,6 +177,7 @@ class FilmModel(
                 val a = o.optJSONArray(key) ?: continue
                 for (i in 0 until minOf(HUES, a.length())) table[i] = a.optDouble(i, table[i].toDouble()).toFloat()
             }
+            o.optJSONArray("crosstalk")?.let { a -> if (a.length() == 9) for (i in 0 until 9) m.crosstalk[i] = a.optDouble(i, m.crosstalk[i].toDouble()).toFloat() }
             return m
         }
 
@@ -183,6 +192,7 @@ class FilmModel(
             m.warmth = f("warmth", m.warmth); m.tint = f("tint", m.tint); m.blueDarkening = f("blueDarkening", m.blueDarkening)
             m.printSharpness = f("printSharpness", m.printSharpness)
             for (i in 0 until HUES) { m.hueShift[i] = f("hueShift$i", 0f); m.hueGain[i] = f("hueGain$i", 1f); m.hueValue[i] = f("hueValue$i", 1f) }
+            for (i in 0 until 9) m.crosstalk[i] = f("crosstalk$i", IDENTITY[i])
             return m
         }
     }
@@ -197,6 +207,7 @@ class FilmModel(
             .putFloat(prefix + "warmth", warmth).putFloat(prefix + "tint", tint).putFloat(prefix + "blueDarkening", blueDarkening)
             .putFloat(prefix + "printSharpness", printSharpness)
         for (i in 0 until HUES) e.putFloat(prefix + "hueShift$i", hueShift[i]).putFloat(prefix + "hueGain$i", hueGain[i]).putFloat(prefix + "hueValue$i", hueValue[i])
+        for (i in 0 until 9) e.putFloat(prefix + "crosstalk$i", crosstalk[i])
         e.apply()
     }
 
@@ -206,13 +217,23 @@ class FilmModel(
         .put("saturation", saturation.toDouble()).put("warmth", warmth.toDouble()).put("tint", tint.toDouble()).put("blueDarkening", blueDarkening.toDouble())
         .put("printSharpness", printSharpness.toDouble())
         .put("hueShift", org.json.JSONArray(hueShift.map { it.toDouble() })).put("hueGain", org.json.JSONArray(hueGain.map { it.toDouble() })).put("hueValue", org.json.JSONArray(hueValue.map { it.toDouble() }))
+        .put("crosstalk", org.json.JSONArray(crosstalk.map { it.toDouble() }))
 
-    fun copy() = FilmModel(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening, printSharpness, hueShift.clone(), hueGain.clone(), hueValue.clone())
+    fun copy() = FilmModel(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening, printSharpness, hueShift.clone(), hueGain.clone(), hueValue.clone(), crosstalk.clone())
 
     /** Whether any per-hue correction is set. */
     val hueCorrected: Boolean get() = hueShift.any { it != 0f } || hueGain.any { it != 1f } || hueValue.any { it != 1f }
 
-    fun resetHues() { hueShift.fill(0f); hueGain.fill(1f); hueValue.fill(1f) }
+    /** Whether a crosstalk matrix was measured. */
+    val crosstalkSet: Boolean get() = (0 until 9).any { Math.abs(crosstalk[it] - IDENTITY[it]) > 1e-4f }
+
+    /** Whether anything measured on the colour patches is set (hue tables or crosstalk). */
+    val colourMeasured: Boolean get() = hueCorrected || crosstalkSet
+
+    /** Clear everything measured on the colour patches: the hue tables and the crosstalk matrix. */
+    fun resetHues() { hueShift.fill(0f); hueGain.fill(1f); hueValue.fill(1f); IDENTITY.copyInto(crosstalk) }
+
+    fun resetCrosstalk() { IDENTITY.copyInto(crosstalk) }
 
     /** The brightness factor of a colour of saturation [s] at hue [h]: 1 for neutrals, the sector's value gain when fully saturated. */
     private fun valueFactor(h: Float, s: Float): Float = 1f - (1f - sectorValue(hueValue, h)) * s * hueWeight(s)
@@ -293,8 +314,8 @@ class FilmModel(
         }
     }
 
-    /** The colour part of the model: saturation (none at all on monochrome film) and grey balance. */
-    fun colorMatrix(): ColorMatrix {
+    /** The global colour part of the model: saturation (none at all on monochrome film) and grey balance. */
+    fun baseColorMatrix(): ColorMatrix {
         val m = ColorMatrix()
         m.setSaturation(if (type.monochrome) 0f else saturation)
         m.postConcat(ColorMatrix(floatArrayOf(
@@ -305,6 +326,27 @@ class FilmModel(
         )))
         return m
     }
+
+    /** The colour part of the model: the global part, then the film's crosstalk (colour film only). */
+    fun colorMatrix(): ColorMatrix {
+        val m = baseColorMatrix()
+        if (!type.monochrome && crosstalkSet) {
+            val c = crosstalk
+            m.postConcat(ColorMatrix(floatArrayOf(
+                c[0], c[1], c[2], 0f, 0f,
+                c[3], c[4], c[5], 0f, 0f,
+                c[6], c[7], c[8], 0f, 0f,
+                0f, 0f, 0f, 1f, 0f,
+            )))
+        }
+        return m
+    }
+
+    /** The fractional input level that prints as [target] (0..255) on channel [channel]: the inverse tone curve, for fitting. */
+    fun inverseTone(channel: Int, target: Float): Float = inverseToneFractional(toneCurves()[channel], target)
+
+    /** The film's white on a channel, as a level (0..255): targets above it are out of reach. */
+    fun toneTop(channel: Int): Int = toneCurves()[channel][255]
 
     /** The inverse of the colour part. Monochrome film discards colour, so only the grey balance is inverted. */
     fun inverseColorMatrix(): ColorMatrix = if (type.monochrome) invert(greyBalanceMatrix()) else invert(colorMatrix())
@@ -526,7 +568,7 @@ class FilmModel(
     private var lutCompensated: IntArray? = null
 
     private fun stateKey(): String = listOf(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening,
-        hueShift.joinToString(","), hueGain.joinToString(","), hueValue.joinToString(",")).joinToString("|")
+        hueShift.joinToString(","), hueGain.joinToString(","), hueValue.joinToString(","), crosstalk.joinToString(",")).joinToString("|")
 
     private fun buildLut(compensated: Boolean): IntArray {
         val n = Lut.LUT_N

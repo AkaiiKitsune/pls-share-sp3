@@ -233,12 +233,13 @@ class Strings private constructor(private val fr: Boolean) {
         "Couleurs : erreur %s avec les réglages globaux, %s après correction par teinte. En haut les patches mesurés, en bas ceux que simule le nouveau modèle.\n%s",
         "Colours: error %s with the global settings, %s after the per-hue correction. Top: the patches measured on the print; bottom: the patches the new model simulates.\n%s",
     )
-    val calHues get() = t("Correction par teinte (mesurée sur une photo de la mire)", "Per-hue correction (measured from a photo of the chart)")
+    val calHues get() = t("Correction des couleurs (mesurée sur une photo de la mire : matrice du film, puis teintes)", "Colour correction (measured from a photo of the chart: film matrix, then hues)")
     val calHuesNone get() = t("aucune", "none")
     val calHueSat get() = t("sat.", "sat.")
     val calHueLum get() = t("lum.", "lum.")
-    val calHuesReset get() = t("Neutraliser les teintes", "Clear the hue correction")
-    val calHuesCleared get() = t("Correction par teinte retirée.", "Hue correction cleared.")
+    val calHuesReset get() = t("Neutraliser la correction des couleurs", "Clear the colour correction")
+    val calHuesCleared get() = t("Correction des couleurs (matrice et teintes) retirée.", "Colour correction (matrix and hues) cleared.")
+    val calCrosstalk get() = t("Matrice du film : R (%.2f %.2f %.2f)  G (%.2f %.2f %.2f)  B (%.2f %.2f %.2f)", "Film matrix: R (%.2f %.2f %.2f)  G (%.2f %.2f %.2f)  B (%.2f %.2f %.2f)")
     val geometryTitle get() = t("Géométrie du tirage (mesurée sur une photo de la mire)", "Print geometry (measured from a photo of the chart)")
     val geometryNone get() = t("Étirement : non mesuré (mesurez une photo de la mire des couleurs).", "Stretch: not measured (measure a photo of the colour chart).")
     val geometryStretch get() = t("Étirement vertical %+.1f %%, horizontal %+.1f %% (mesuré sur la mire des couleurs) ; bords de la carte non trouvés.", "Vertical stretch %+.1f %%, horizontal %+.1f %% (measured on the colour chart); the card's edges were not found.")

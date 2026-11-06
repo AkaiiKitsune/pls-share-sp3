@@ -236,7 +236,7 @@ class PrinterGeometry(
      * [toCard] (c, f) on the paper and receives the image pixel that belongs there when the image
      * fills the window square: the print comes out whole, square and straight. Otherwise file row
      * f, column c receives the image at ([toPrintX] (c), [toPrint] (f)), so that the printer's
-     * stretch lands every pixel at its own place. Samples outside the image repeat its edge.
+     * stretch lands every pixel at its own place. Bicubic sampling; outside the image its edge repeats.
      */
     fun prewarp(image: Bitmap): Bitmap {
         if (!measured || !compensate) return image
@@ -244,17 +244,30 @@ class PrinterGeometry(
         val src = IntArray(w * h)
         image.getPixels(src, 0, w, 0, 0, w, h)
         val out = IntArray(w * h)
-        fun lerp(a: Int, b: Int, t: Int): Int {
-            val r = (((a shr 16) and 0xFF) * (256 - t) + ((b shr 16) and 0xFF) * t) shr 8
-            val g = (((a shr 8) and 0xFF) * (256 - t) + ((b shr 8) and 0xFF) * t) shr 8
-            val bl = ((a and 0xFF) * (256 - t) + (b and 0xFF) * t) shr 8
-            return (a and 0xFF000000.toInt()) or (r shl 16) or (g shl 8) or bl
+        // Bicubic (Catmull-Rom) sampling, 16 taps, the edge repeated: keeps the detail a bilinear
+        // resampling would soften, with the rotation and the scale changing every pixel's position.
+        val weights = FloatArray(4)
+        fun cubic(t: Float, out: FloatArray) {
+            val t2 = t * t; val t3 = t2 * t
+            out[0] = 0.5f * (-t3 + 2 * t2 - t); out[1] = 0.5f * (3 * t3 - 5 * t2 + 2); out[2] = 0.5f * (-3 * t3 + 4 * t2 + t); out[3] = 0.5f * (t3 - t2)
         }
+        val wy = FloatArray(4)
         fun bilinear(px: Float, py: Float): Int {
             val x = px.coerceIn(0f, w - 1f); val y = py.coerceIn(0f, h - 1f)
-            val x0 = x.toInt().coerceIn(0, w - 1); val x1 = (x0 + 1).coerceAtMost(w - 1); val tx = ((x - x0) * 256).toInt().coerceIn(0, 256)
-            val y0 = y.toInt().coerceIn(0, h - 1); val y1 = (y0 + 1).coerceAtMost(h - 1); val ty = ((y - y0) * 256).toInt().coerceIn(0, 256)
-            return lerp(lerp(src[y0 * w + x0], src[y0 * w + x1], tx), lerp(src[y1 * w + x0], src[y1 * w + x1], tx), ty)
+            val x0 = x.toInt().coerceIn(0, w - 1); val y0 = y.toInt().coerceIn(0, h - 1)
+            cubic(x - x0, weights); cubic(y - y0, wy)
+            var r = 0f; var g = 0f; var b = 0f
+            for (j in 0 until 4) {
+                val yy = (y0 + j - 1).coerceIn(0, h - 1) * w
+                var rr = 0f; var gg = 0f; var bb = 0f
+                for (i in 0 until 4) {
+                    val c = src[yy + (x0 + i - 1).coerceIn(0, w - 1)]
+                    val wx = weights[i]
+                    rr += ((c shr 16) and 0xFF) * wx; gg += ((c shr 8) and 0xFF) * wx; bb += (c and 0xFF) * wx
+                }
+                r += rr * wy[j]; g += gg * wy[j]; b += bb * wy[j]
+            }
+            return (0xFF shl 24) or (Math.round(r).coerceIn(0, 255) shl 16) or (Math.round(g).coerceIn(0, 255) shl 8) or Math.round(b).coerceIn(0, 255)
         }
         // The hand-entered rotation: the file is taken to land that much further clockwise.
         val trim = Math.toRadians(rotationTrim.toDouble())

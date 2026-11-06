@@ -83,13 +83,61 @@ class ChartReaderTest {
         val reading = ChartReader.read(paper, floatArrayOf(100f, 100f, 700f, 100f, 700f, 700f, 100f, 700f), FilmType.COLOR)
         val fit = ChartReader.fit(reading, FilmType.COLOR)
         describe("twisted", reading, fit)
-        assertTrue("hue table lowers the colour error", fit.colourRmsAfter < fit.colourRmsBefore * 0.7)
-        assertEquals(truth.hueShift[0], fit.model.hueShift[0], 6f)
-        assertEquals(truth.hueShift[3], fit.model.hueShift[3], 8f)
-        assertEquals(truth.hueGain[0], fit.model.hueGain[0], 0.15f)
-        assertEquals(0f, fit.model.hueShift[2], 6f)
-        assertEquals(truth.hueValue[2], fit.model.hueValue[2], 0.12f)
-        assertEquals(1f, fit.model.hueValue[0], 0.12f)
+        assertTrue("colour correction lowers the colour error", fit.colourRmsAfter < fit.colourRmsBefore * 0.7)
+        // The matrix and the tables share the twist between them: what counts is that the fitted
+        // model renders the patches like the film does.
+        assertTrue("patches rendered like the film: %.1f %%".format(patchRms(truth, fit.model)), patchRms(truth, fit.model) < 4.0)
+        assertTrue(fit.model.colourMeasured)
+    }
+
+    @Test
+    fun `three readings combine as medians, two as means`() {
+        fun reading(k: Float) = ChartReader.Reading(List(11) { floatArrayOf(k, k, k) }, List(16) { floatArrayOf(k, k, k) }, floatArrayOf(k, k, k), floatArrayOf(k, k, k),
+            android.graphics.Bitmap.createBitmap(4, 4, android.graphics.Bitmap.Config.ARGB_8888), List(ChartReader.GRADIENT_SAMPLES) { floatArrayOf(k, k, k) })
+        val three = ChartReader.average(listOf(reading(0.2f), reading(0.25f), reading(0.9f))) // 0.9: a glint on one photo
+        assertEquals(0.25f, three.greys[3][1], 1e-5f)
+        assertEquals(0.25f, three.patches[7][0], 1e-5f)
+        assertEquals(0.25f, three.gradient[10][2], 1e-5f)
+        val two = ChartReader.average(listOf(reading(0.2f), reading(0.4f)))
+        assertEquals(0.3f, two.greys[0][0], 1e-5f)
+    }
+
+    /** RMS distance, in percent, between the 16 patches as two models render them. */
+    private fun patchRms(a: FilmModel, b: FilmModel): Double {
+        var err = 0.0
+        for (src in TestChart.patches) {
+            val pa = intArrayOf(src); val pb = intArrayOf(src)
+            a.simulate(pa); b.simulate(pb)
+            for (shift in listOf(16, 8, 0)) { val d = (((pa[0] shr shift) and 0xFF) - ((pb[0] shr shift) and 0xFF)) / 255.0; err += d * d / 3 }
+        }
+        return Math.sqrt(err / TestChart.patches.size) * 100
+    }
+
+    @Test
+    fun `the film's crosstalk is recovered from the patches`() {
+        // A film whose red channel picks up a fifth of the green, and whose blue leaks into green.
+        val truth = FilmModel.defaults(FilmType.COLOR).apply { crosstalk = floatArrayOf(0.8f, 0.2f, 0f, 0f, 0.85f, 0.15f, 0f, 0f, 1f) }
+        val chart = TestChart.renderContent(600, FilmType.COLOR)
+        val simulated = truth.simulated(chart)
+        val paper = android.graphics.Bitmap.createBitmap(800, 800, android.graphics.Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(paper).apply { drawColor(android.graphics.Color.WHITE); drawBitmap(simulated, 100f, 100f, null) }
+        val reading = ChartReader.read(paper, floatArrayOf(100f, 100f, 700f, 100f, 700f, 700f, 100f, 700f), FilmType.COLOR)
+        val fit = ChartReader.fit(reading, FilmType.COLOR)
+        describe("crosstalk", reading, fit)
+        println("crosstalk found: " + fit.model.crosstalk.joinToString { "%.2f".format(it) })
+        assertTrue(fit.model.crosstalkSet)
+        // The global saturation, fitted first, takes part of the desaturation the mixing causes, so
+        // the terms come out milder than the truth; the direction must be right, and the rendering.
+        for (i in 0 until 9) assertEquals("term $i", truth.crosstalk[i], fit.model.crosstalk[i], 0.15f)
+        assertTrue("red takes green: ${fit.model.crosstalk[1]}", fit.model.crosstalk[1] > 0.03f)
+        assertTrue("green takes blue: ${fit.model.crosstalk[5]}", fit.model.crosstalk[5] > 0.03f)
+        assertTrue("patches rendered like the film: %.1f %%".format(patchRms(truth, fit.model)), patchRms(truth, fit.model) < 3.0)
+        // The compensation inverts it: a colour sent through the inverse then the film comes back.
+        val px = intArrayOf(android.graphics.Color.rgb(200, 90, 60))
+        fit.model.compensate(px); fit.model.simulate(px)
+        val back = px[0]
+        val ref = intArrayOf(android.graphics.Color.rgb(200, 90, 60)).also { FilmModel.defaults(FilmType.COLOR).apply { compensate(it); simulate(it) } }[0]
+        for (shift in listOf(16, 8, 0)) assertEquals("channel $shift", ((ref shr shift) and 0xFF).toFloat(), ((back shr shift) and 0xFF).toFloat(), 12f)
     }
 
     @Test
