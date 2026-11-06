@@ -18,7 +18,7 @@ import java.io.FileOutputStream
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi-night")
+@Config(sdk = [31], qualifiers = "w412dp-h915dp-night-xxhdpi")
 class ScreenshotTest {
     private val outDir = File(System.getProperty("screenshots.dir") ?: "build/screenshots").apply { mkdirs() }
 
@@ -34,9 +34,10 @@ class ScreenshotTest {
         m.invoke(activity, *args)
     }
 
-    private fun shoot(view: View, name: String, width: Int, height: Int) {
+    private fun shoot(view: View, name: String, width: Int, height: Int, scrollTo: Int = 0) {
         view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
         view.layout(0, 0, width, height)
+        if (scrollTo > 0) findScroll(view)?.scrollTo(0, scrollTo)
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(0xFF121212.toInt())
@@ -88,9 +89,8 @@ class ScreenshotTest {
         shoot(editor, "04-editor-texts", w, h)
 
         call(activity, "showTab", true)
-        val scroll = findScroll(editor)
-        scroll?.scrollTo(0, 1400)
-        shoot(editor, "05-editor-adjust-scrolled", w, h)
+        shoot(editor, "05-editor-adjust-scrolled", w, h, scrollTo = 1800)
+        findScroll(editor)?.scrollTo(0, 0)
 
         val guide = field(activity, "guideView") as View
         shoot(guide, "06-guide", w, h)

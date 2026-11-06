@@ -54,7 +54,14 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
-            all { it.systemProperty("robolectric.graphicsMode", "NATIVE") }
+            all {
+                it.systemProperty("robolectric.graphicsMode", "NATIVE")
+                // Robolectric downloads its Android images itself; a directory of pre-fetched jars can be given instead.
+                System.getenv("ROBOLECTRIC_DEPS")?.let { dir ->
+                    it.systemProperty("robolectric.offline", "true")
+                    it.systemProperty("robolectric.dependency.dir", dir)
+                }
+            }
         }
     }
 }
@@ -68,5 +75,5 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("org.robolectric:robolectric:4.15.1")
 }

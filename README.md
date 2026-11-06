@@ -137,9 +137,12 @@ Le module `core` implémente tout ça (`instax/Protocol.kt`, `InstaxPrinter.kt`,
 ## Développement
 
 ```bash
-./gradlew :core:test        # 25 tests, dont un cycle d'impression complet contre le simulateur
+./gradlew :core:test          # tests du protocole, dont un cycle d'impression complet contre le simulateur
 ./gradlew :app:assembleDebug  # nécessite le SDK Android (sinon le module est ignoré automatiquement)
+./gradlew :app:testDebugUnitTest --tests ScreenshotTest   # captures d'écran de chaque écran dans app/build/screenshots
 ```
+
+Les captures sont rendues par Robolectric en mode graphique natif (vrais pixels du framework, sans émulateur) sur un écran 412 × 915 dp en mode sombre. Robolectric télécharge lui-même son image Android ; si ce téléchargement est limité, placez les jars dans un dossier et donnez-le via `ROBOLECTRIC_DEPS=/chemin`.
 
 Structure :
 

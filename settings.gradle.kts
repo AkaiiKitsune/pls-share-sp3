@@ -15,6 +15,8 @@ pluginManagement {
 
 dependencyResolutionManagement {
     repositories {
+        // Artifacts placed in ~/.m2 by hand (e.g. a large jar Maven Central rate-limits) are picked up first.
+        mavenLocal()
         // repo1 is Maven Central's primary host; the repo.maven.apache.org alias rate-limits some networks.
         maven("https://repo1.maven.org/maven2")
         mavenCentral()
