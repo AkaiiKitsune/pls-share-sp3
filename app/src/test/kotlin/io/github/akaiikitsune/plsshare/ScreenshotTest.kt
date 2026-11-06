@@ -111,32 +111,32 @@ class ScreenshotTest {
         collage.setCell(2, sample)
         shoot(collageScreen, "08-collage", w, h)
 
-        // Measurement screen with the daylight chart photo, corners marked and the fit shown.
+        // Measurement screen with the daylight chart photo, markers set and the fit shown.
         val chart = javaClass.getResourceAsStream("/chart-daylight.jpg")?.use { android.graphics.BitmapFactory.decodeStream(it) }
         if (chart != null) {
             val scaled = Photos.scaledForEditing(chart, 2000)
             val k = scaled.width.toFloat() / chart.width
-            val cornerPick = field(activity, "cornerPick") as CornerPickView
+            val screen = field(activity, "measureScreen") as MeasureScreen
+            fun sfield(name: String): Any = MeasureScreen::class.java.getDeclaredField(name).apply { isAccessible = true }.get(screen)
+            fun scall(name: String, vararg args: Any?): Any? = MeasureScreen::class.java.declaredMethods.first { it.name == name && it.parameterCount == args.size }.apply { isAccessible = true }.invoke(screen, *args)
+            val cornerPick = sfield("cornerPick") as CornerPickView
             val corners = FloatArray(8)
             for ((i, p) in listOf(639 to 1214, 2332 to 1226, 2320 to 2824, 627 to 2812).withIndex()) { corners[2 * i] = p.first * k; corners[2 * i + 1] = p.second * k }
-            val add = MainActivity::class.java.getDeclaredMethod("addChartPhoto", Bitmap::class.java, FloatArray::class.java, Boolean::class.java).apply { isAccessible = true }
-            add.invoke(activity, scaled, corners, true)
-            // A second photo (the flash one) without corners, dimmed in the strip.
-            javaClass.getResourceAsStream("/chart-flash.jpg")?.use { android.graphics.BitmapFactory.decodeStream(it) }?.let { add.invoke(activity, Photos.scaledForEditing(it, 2000), null, false) }
-            call(activity, "syncMeasureButtons")
-            val reading = ChartReader.read(scaled, cornerPick.cornersArray()!!, FilmType.COLOR)
+            scall("addChartPhoto", scaled, corners, true)
+            // A second photo (the flash one) without markers, dimmed in the strip.
+            javaClass.getResourceAsStream("/chart-flash.jpg")?.use { android.graphics.BitmapFactory.decodeStream(it) }?.let { scall("addChartPhoto", Photos.scaledForEditing(it, 2000), null, false) }
+            scall("syncMeasureButtons")
+            val reading = ChartReader.read(scaled, corners, FilmType.COLOR)
             val fit = ChartReader.fit(reading, FilmType.COLOR)
             val model = fit.model
-            (field(activity, "measureReport") as android.widget.TextView).text = "Résultat : %.1f %%.".format(fit.greyRms)
-            val strip = MainActivity::class.java.getDeclaredMethod("comparisonStrip", ChartReader.Reading::class.java, FilmModel::class.java).apply { isAccessible = true }
-            (field(activity, "measureCompare") as android.widget.ImageView).setImageBitmap(strip.invoke(activity, reading, model) as Bitmap)
-            val patches = MainActivity::class.java.getDeclaredMethod("patchStrip", ChartReader.Reading::class.java, FilmModel::class.java).apply { isAccessible = true }
-            (field(activity, "measureColourCompare") as android.widget.ImageView).setImageBitmap(patches.invoke(activity, reading, model) as Bitmap)
-            val hues = MainActivity::class.java.getDeclaredMethod("describeHues", FilmModel::class.java).apply { isAccessible = true }
-            (field(activity, "measureColourReport") as android.widget.TextView).text =
-                "Couleurs : erreur %.1f %% avec les réglages globaux, %.1f %% après correction par teinte.\n%s".format(fit.colourRmsBefore, fit.colourRmsAfter, hues.invoke(activity, model))
-            (field(activity, "measureWarped") as android.widget.ImageView).setImageBitmap(reading.warped)
-            (field(activity, "measureResultBox") as View).visibility = View.VISIBLE
+            (sfield("measureReport") as android.widget.TextView).text = "Résultat : %.1f %%.".format(fit.greyRms)
+            (sfield("measureCompare") as android.widget.ImageView).setImageBitmap(scall("comparisonStrip", reading, model) as Bitmap)
+            (sfield("measureColourCompare") as android.widget.ImageView).setImageBitmap(scall("patchStrip", reading, model) as Bitmap)
+            (sfield("measureColourReport") as android.widget.TextView).text =
+                "Couleurs : erreur %.1f %% avec les réglages globaux, %.1f %% après correction par teinte.\n%s".format(fit.colourRmsBefore, fit.colourRmsAfter, describeHues(activity.s, model))
+            (sfield("measureWarped") as android.widget.ImageView).setImageBitmap(reading.warped)
+            (sfield("rectifiedBox") as View).visibility = View.VISIBLE
+            (sfield("measureResultBox") as View).visibility = View.VISIBLE
             val measure = field(activity, "measureView") as View
             shoot(measure, "09-measure", w, h, scrollTo = 300)
             shoot(measure, "09b-measure-result", w, h, scrollTo = 5000)

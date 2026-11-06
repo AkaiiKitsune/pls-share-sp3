@@ -72,19 +72,14 @@ class MainActivity : Activity() {
         private const val PREF_QUEUE = "queue"
         private const val PREF_COMPENSATE = "compensate"
         private const val PREF_FILM_TYPE = "filmType"
-        private const val PREF_SHOOT = "shootUri"
         private const val MENU_QUEUE = 7
         private const val MENU_CALIBRATE = 8
         private const val MENU_COMPENSATE = 9
         private const val MENU_COLLAGE = 10
         private const val REQUEST_PICK_CELL = 4
-        private const val REQUEST_PICK_CHART = 11
-        private const val REQUEST_SHOOT_CHART = 12
         private const val REQUEST_IMPORT_SETTINGS = 13
         private const val MENU_SETTINGS_EXPORT = 11
         private const val MENU_SETTINGS_IMPORT = 12
-        /** Longest side kept per chart photo: enough for 9×9 samples per patch, small enough for ten photos in memory. */
-        private const val CHART_PHOTO_SIDE = 1600
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
         private const val UNDO_DEPTH = 40
@@ -104,73 +99,37 @@ class MainActivity : Activity() {
         private const val EDITOR_SOURCE_SIDE = 1400
     }
 
-    private val s = Strings.forDefaultLocale()
-    private val ui by lazy { Ui(this) }
+    internal val s = Strings.forDefaultLocale()
+    internal val ui by lazy { Ui(this) }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val printing = AtomicBoolean(false)
 
     private lateinit var network: PrinterNetwork
     private lateinit var watcher: PrinterWatcher
     private lateinit var updater: Updater
-    private lateinit var prefs: SharedPreferences
+    internal lateinit var prefs: SharedPreferences
 
     private lateinit var container: FrameLayout
-    private lateinit var homeView: View
+    internal lateinit var homeView: View
     private lateinit var editorScreen: View
     private lateinit var guideView: View
     private lateinit var historyView: View
-    private lateinit var calibrateView: View
+    private lateinit var historyScreen: HistoryScreen
+    internal lateinit var calibrateView: View
     private lateinit var collageView: View
     private lateinit var collage: CollageView
     private var pendingCell = -1
     private lateinit var measureView: View
-    private lateinit var cornerPick: CornerPickView
-    private lateinit var measureRunButton: Button
-    private lateinit var measureResetButton: Button
-    private lateinit var measureResultBox: LinearLayout
-    private lateinit var measureReport: TextView
-    private lateinit var measureCompare: ImageView
-    private lateinit var measureColourBox: LinearLayout
-    private lateinit var measureColourReport: TextView
-    private lateinit var measureColourCompare: ImageView
+    private lateinit var measureScreen: MeasureScreen
     private lateinit var hueReadout: TextView
-    private var measuredFilm: FilmModel? = null
-    /**
-     * One photo of the printed chart in the measurement screen. On colour film the user marks the
-     * centres of the four corner patches ([anchors]) and the image corners follow; on monochrome
-     * film the corners are marked directly. [reading] is kept with the corners it was read with.
-     */
-    private class ChartPhoto(val bitmap: Bitmap, var corners: FloatArray?) {
-        var anchors: FloatArray? = corners?.let { ChartReader.anchorsFromCorners(it) }
-        var reading: ChartReader.Reading? = null
-        var readingCorners: FloatArray? = null
-        val complete get() = corners != null
-        var thumb: ImageView? = null
-        /** Uniform patches of the photo, for the magnet; computed on first use. */
-        var candidates: List<FloatArray>? = null
-    }
-    private lateinit var markPanel: View
-    private lateinit var markPanelButton: Button
-    private lateinit var rectifiedBox: View
-    private lateinit var rectifiedLabel: TextView
-    private var rectifiedGeneration = 0
 
-    /** Every chart photo loaded so far; all those with corners are measured and averaged. */
-    private val chartPhotos = ArrayList<ChartPhoto>()
-    private var chartCurrent = -1
-    private lateinit var chartStrip: LinearLayout
-    private lateinit var chartStripScroll: HorizontalScrollView
-    private lateinit var chartStripHint: TextView
-    private lateinit var measureWarped: ImageView
-    private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
     private lateinit var film: FilmModel
     private lateinit var geometry: PrinterGeometry
-    private var measuredGeometry: FloatArray? = null
     private lateinit var geometryReadout: TextView
     private lateinit var geometryToggle: Button
     private var compensate = false
-    private var filmType = FilmType.COLOR
+    internal var filmType = FilmType.COLOR
     private var chartBase: Bitmap? = null
     private lateinit var filmChip: Button
     private lateinit var calibrationTitle: TextView
@@ -179,7 +138,6 @@ class MainActivity : Activity() {
     private val colourOnlyViews = ArrayList<View>()
     /** Calibration sliders that only make sense on colour film (bar + its header). */
     private val colourOnlyCal = ArrayList<View>()
-    private lateinit var historyList: LinearLayout
     private lateinit var queueRow: LinearLayout
     private lateinit var queueEmptyText: TextView
     private lateinit var printQueueButton: Button
@@ -262,7 +220,7 @@ class MainActivity : Activity() {
 
     /** The printer address, mirrored from the debug field so background threads never touch a view. */
     @Volatile private var currentHost = InstaxPrinter.DEFAULT_HOST
-    private var connected: PrinterInfo? = null
+    internal var connected: PrinterInfo? = null
     private var debug = false
 
     /** Every step and every frame, newest last. Shown in debug mode and copyable for bug reports. */
@@ -300,10 +258,12 @@ class MainActivity : Activity() {
         }
         homeView = buildHome()
         editorScreen = buildEditor()
-        guideView = buildGuide()
-        historyView = buildHistory()
+        guideView = GuideScreen(this).build()
+        historyScreen = HistoryScreen(this)
+        historyView = historyScreen.build()
         calibrateView = buildCalibration()
-        measureView = buildMeasure()
+        measureScreen = MeasureScreen(this)
+        measureView = measureScreen.build()
         collageView = buildCollage()
         container.addView(homeView)
         applyFilmType()
@@ -354,7 +314,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun show(screen: View) {
+    internal fun show(screen: View) {
         container.removeAllViews()
         container.addView(screen)
     }
@@ -362,7 +322,7 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Home screen
 
     /** A fixed title bar: title on the left, an optional action on the right. */
-    private fun titleBar(title: String, action: View? = null) = LinearLayout(this).apply {
+    internal fun titleBar(title: String, action: View? = null) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(ui.dp(20), ui.dp(12), ui.dp(20), ui.dp(12))
@@ -371,7 +331,7 @@ class MainActivity : Activity() {
     }
 
     /** A screen made of a fixed title bar and a scrolling body. */
-    private fun fixedHeaderScreen(header: View, body: View): View = ui.column().apply {
+    internal fun fixedHeaderScreen(header: View, body: View): View = ui.column().apply {
         addView(header, LinearLayout.LayoutParams(ui.match, ui.wrap))
         addView(View(this@MainActivity).apply { setBackgroundColor(Ui.CARD_STRONG) }, LinearLayout.LayoutParams(ui.match, ui.dp(1)))
         addView(ScrollView(this@MainActivity).apply { addView(body) }, LinearLayout.LayoutParams(ui.match, 0, 1f))
@@ -540,7 +500,7 @@ class MainActivity : Activity() {
             when (item.itemId) {
                 MENU_GUIDE -> show(guideView)
                 MENU_PIN -> askPin()
-                MENU_HISTORY -> { refreshHistory(); show(historyView) }
+                MENU_HISTORY -> { historyScreen.refresh(); show(historyView) }
                 MENU_EXPORT -> exportCurrent()
                 MENU_SETTINGS_EXPORT -> exportSettings()
                 MENU_SETTINGS_IMPORT -> startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQUEST_IMPORT_SETTINGS)
@@ -647,19 +607,19 @@ class MainActivity : Activity() {
      * Something the user must know right now (an error, a result): a long toast, journaled. Nothing
      * is ever left written on the screen; the journal is for the debug console.
      */
-    private fun message(text: String) {
+    internal fun message(text: String) {
         if (text.isBlank()) return
         android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show()
         journal(text)
     }
 
     /** A passing confirmation (a setting toggled, something saved): a toast, journaled, never left on screen. */
-    private fun toast(text: String) {
+    internal fun toast(text: String) {
         android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show()
         journal(text)
     }
 
-    private fun setBusy(busy: Boolean) {
+    internal fun setBusy(busy: Boolean) {
         updateButtons()
         progressBar.visibility = if (busy) View.VISIBLE else View.GONE
         cancelButton.visibility = if (busy) View.VISIBLE else View.GONE
@@ -741,34 +701,8 @@ class MainActivity : Activity() {
                 mainHandler.post { result.onSuccess { collage.setCell(cell, it) }.onFailure { message(s.photoError.format(it.message ?: "")) } }
             }.start()
         }
-        if (requestCode == REQUEST_PICK_CHART && resultCode == RESULT_OK && data != null) {
-            val uris = ArrayList<Uri>()
-            val clip = data.clipData
-            if (clip != null) for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri
-            else data.data?.let { uris += it }
-            loadChartPhotos(uris)
-        }
+        if (requestCode == MeasureScreen.REQUEST_PICK_CHART || requestCode == MeasureScreen.REQUEST_SHOOT_CHART) measureScreen.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_IMPORT_SETTINGS && resultCode == RESULT_OK && data?.data != null) importSettings(data.data!!)
-        if (requestCode == REQUEST_SHOOT_CHART) {
-            // The camera app is heavy: this process is often killed meanwhile, so the pending
-            // entry is remembered in the preferences, not only in a field.
-            val uri = shootUri ?: prefs.getString(PREF_SHOOT, null)?.let { Uri.parse(it) }
-            shootUri = null
-            prefs.edit().remove(PREF_SHOOT).apply()
-            val file = uri?.let { CaptureProvider.fileFor(this, it) }
-            journal("chart photo: result $resultCode, uri $uri, file ${file?.length() ?: -1} bytes")
-            show(measureView)
-            if (file == null) {
-                if (resultCode == RESULT_OK) measureStatus(s.measureFailed.format("no capture file"))
-            } else if (resultCode == RESULT_OK && file.length() > 0) {
-                loadChartPhotos(listOf(uri))
-            } else if (resultCode == RESULT_OK) {
-                measureStatus(s.measureFailed.format(s.measureEmptyCapture))
-                file.delete()
-            } else {
-                file.delete()
-            }
-        }
         if (requestCode == REQUEST_PICK_MANY && resultCode == RESULT_OK && data != null) {
             val uris = ArrayList<Uri>()
             val clip = data.clipData
@@ -899,7 +833,7 @@ class MainActivity : Activity() {
         helpDefaultColor = helpButton.currentTextColor
         val actions = ui.column().apply {
             addView(ui.softButton(s.printChart) { printChart() }.apply { tooltipText = s.printChartTip }, LinearLayout.LayoutParams(ui.match, ui.wrap))
-            addView(ui.softButton(s.measureFromPhoto) { openMeasure() }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
+            addView(ui.softButton(s.measureFromPhoto) { measureScreen.open() }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
             addView(helpButton, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
         }
         val top = LinearLayout(this).apply {
@@ -1018,7 +952,7 @@ class MainActivity : Activity() {
 
     private fun syncCalibration() {
         for ((bar, read) in calBars) bar.progress = read()
-        hueReadout.text = describeHues(film)
+        hueReadout.text = describeHues(s, film)
     }
 
     private fun onFilmChanged() {
@@ -1050,449 +984,6 @@ class MainActivity : Activity() {
                 toast(s.printChartStarted)
             }
             .show()
-    }
-
-    // ---------------------------------------------------------------- Chart measurement
-
-    private fun buildMeasure(): View {
-        val root = ui.column(20)
-        root.addView(ui.text(s.measureIntro, 14f))
-        ui.space(root, 12)
-        val pick = ui.softButton(s.measurePick) { pickChartPhoto() }
-        val shoot = ui.softButton(s.measureShoot) { shootChartPhoto() }
-        root.addView(ui.row(pick, shoot), LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 12)
-        // The photos loaded so far: tap one to check or fix its corners, long-press to drop it.
-        chartStrip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        chartStripScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(chartStrip, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
-            visibility = View.GONE
-        }
-        root.addView(chartStripScroll, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        chartStripHint = ui.text(s.measureStripHint, 12f, alpha = 0.7f).apply { visibility = View.GONE }
-        root.addView(chartStripHint, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
-        ui.space(root, 10)
-        // The marking panel folds away once the marks are right; the strip reopens it.
-        markPanelButton = ui.softButton("") { setMarkPanel(markPanel.visibility != View.VISIBLE) }
-        root.addView(markPanelButton, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 8)
-        markPanel = ui.column().apply {
-            cornerPick = CornerPickView(this@MainActivity).apply {
-                background = ui.rounded(Ui.CARD, 12)
-                clipToOutline = true
-                onChanged = { onChartCornersChanged() }
-                onReleased = { index -> onChartMarkReleased(index) }
-            }
-            addView(cornerPick, LinearLayout.LayoutParams(ui.match, ui.wrap))
-            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(8)))
-            addView(ui.text(s.measureHint, 12f, alpha = 0.7f))
-            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(12)))
-        }
-        root.addView(markPanel, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        // The rectified chart: the selected photo's while marking, all photos averaged once folded.
-        rectifiedBox = ui.column().apply {
-            rectifiedLabel = ui.text(s.measureWarped, 13f, alpha = 0.7f)
-            addView(rectifiedLabel)
-            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(6)))
-            measureWarped = object : ImageView(this@MainActivity) {
-                override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                    val w = MeasureSpec.getSize(widthMeasureSpec) * 3 / 5
-                    setMeasuredDimension(w, w)
-                }
-            }.apply {
-                scaleType = ImageView.ScaleType.FIT_XY
-                background = ui.rounded(Ui.CARD, 12)
-                clipToOutline = true
-            }
-            addView(measureWarped, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { gravity = Gravity.CENTER_HORIZONTAL })
-            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(12)))
-            visibility = View.GONE
-        }
-        root.addView(rectifiedBox, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        measureResetButton = ui.softButton(s.measureReset) { resetChartPhotos() }
-        measureRunButton = ui.primaryButton(s.measureRun) { runMeasure() }
-        root.addView(ui.row(measureResetButton, measureRunButton), LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 16)
-
-        measureResultBox = ui.column().apply { visibility = View.GONE }
-        measureReport = ui.text("", 13f, alpha = 0.7f)
-        measureResultBox.addView(measureReport)
-        ui.space(measureResultBox, 8)
-        measureCompare = object : ImageView(this) {
-            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val w = MeasureSpec.getSize(widthMeasureSpec)
-                setMeasuredDimension(w, w * 2 / 11)
-            }
-        }.apply {
-            scaleType = ImageView.ScaleType.FIT_XY
-            background = ui.rounded(Ui.CARD, 12)
-            clipToOutline = true
-        }
-        measureResultBox.addView(measureCompare, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        measureColourBox = ui.column()
-        ui.space(measureColourBox, 12)
-        measureColourReport = ui.text("", 13f, alpha = 0.7f)
-        measureColourBox.addView(measureColourReport)
-        ui.space(measureColourBox, 8)
-        measureColourCompare = object : ImageView(this) {
-            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val w = MeasureSpec.getSize(widthMeasureSpec)
-                setMeasuredDimension(w, w * 2 / 16)
-            }
-        }.apply {
-            scaleType = ImageView.ScaleType.FIT_XY
-            background = ui.rounded(Ui.CARD, 12)
-            clipToOutline = true
-        }
-        measureColourBox.addView(measureColourCompare, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        measureResultBox.addView(measureColourBox, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(measureResultBox, 12)
-        measureResultBox.addView(ui.primaryButton(s.measureApply) { applyMeasured() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        root.addView(measureResultBox, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 16)
-
-        syncMeasureButtons()
-        val header = titleBar(s.measureTitle, ui.softButton(s.back) { show(calibrateView) }.apply { minimumWidth = 0 })
-        return fixedHeaderScreen(header, root)
-    }
-
-    private fun openMeasure() {
-        hideMeasureResult()
-        cornerPick.joinMarkers = filmType.monochrome
-        show(measureView)
-    }
-
-    private fun syncMeasureButtons() {
-        val any = chartPhotos.isNotEmpty()
-        ui.setEnabledLook(measureResetButton, any)
-        ui.setEnabledLook(measureRunButton, chartPhotos.any { it.complete })
-        chartStripScroll.visibility = if (any) View.VISIBLE else View.GONE
-        chartStripHint.visibility = if (any) View.VISIBLE else View.GONE
-        markPanelButton.visibility = if (any) View.VISIBLE else View.GONE
-        if (!any) { markPanel.visibility = View.GONE; rectifiedBox.visibility = View.GONE }
-        val open = markPanel.visibility == View.VISIBLE
-        markPanelButton.text = (if (open) "▾ " else "▸ ") + (if (chartCurrent >= 0) s.measureMarksOf.format(chartCurrent + 1, chartPhotos.size) else s.measureMarks)
-    }
-
-    private fun setMarkPanel(open: Boolean) {
-        markPanel.visibility = if (open) View.VISIBLE else View.GONE
-        syncMeasureButtons()
-        updateRectified()
-    }
-
-    private fun hideMeasureResult() {
-        measuredFilm = null
-        measureResultBox.visibility = View.GONE
-    }
-
-    private fun resetChartPhotos() {
-        chartPhotos.clear()
-        chartCurrent = -1
-        chartStrip.removeAllViews()
-        cornerPick.bitmap = null
-        cornerPick.outline = null
-        hideMeasureResult()
-        syncMeasureButtons()
-    }
-
-    /** The markers moved: keep them on the current photo, derive the corners, and its reading is stale. */
-    private fun onChartCornersChanged() {
-        val entry = chartPhotos.getOrNull(chartCurrent) ?: return
-        val marks = cornerPick.cornersArray()
-        if (filmType.monochrome) {
-            entry.corners = marks
-            entry.anchors = marks?.let { ChartReader.anchorsFromCorners(it) }
-        } else {
-            entry.anchors = marks
-            entry.corners = marks?.let { runCatching { ChartReader.cornersFromAnchors(it) }.getOrNull() }
-        }
-        cornerPick.outline = if (filmType.monochrome) null else entry.corners
-        if (entry.readingCorners?.contentEquals(entry.corners ?: FloatArray(0)) != true) { entry.reading = null; hideMeasureResult() }
-        refreshChartThumb(entry)
-        syncMeasureButtons()
-    }
-
-    /** A marker was released: on colour film it snaps to the centre of the patch under it; then the rectified chart follows. */
-    private fun onChartMarkReleased(index: Int) {
-        val entry = chartPhotos.getOrNull(chartCurrent) ?: return
-        if (filmType.monochrome) { updateRectified(); return }
-        val mark = cornerPick.corners.getOrNull(index) ?: return
-        val x = mark[0]; val y = mark[1]
-        val generation = ++rectifiedGeneration
-        Thread {
-            val candidates = entry.candidates ?: runCatching { ChartReader.patchCandidates(entry.bitmap) }.getOrDefault(emptyList()).also { entry.candidates = it }
-            val snapped = ChartReader.snapToPatch(candidates, x, y, maxOf(entry.bitmap.width, entry.bitmap.height))
-            mainHandler.post {
-                if (generation != rectifiedGeneration || chartPhotos.getOrNull(chartCurrent) !== entry) return@post
-                if (snapped != null && cornerPick.corners.size > index) {
-                    cornerPick.corners[index] = snapped
-                    cornerPick.invalidate()
-                    onChartCornersChanged()
-                }
-                updateRectified()
-            }
-        }.start()
-    }
-
-    /**
-     * The rectified chart under the strip: the selected photo's while its marks are being edited,
-     * every measured photo averaged pixel by pixel once the panel is folded. Readings are computed
-     * in the background and kept with the corners they were read with.
-     */
-    private fun updateRectified() {
-        val open = markPanel.visibility == View.VISIBLE
-        val targets = if (open) listOfNotNull(chartPhotos.getOrNull(chartCurrent)?.takeIf { it.complete }) else chartPhotos.filter { it.complete }
-        if (targets.isEmpty()) { rectifiedBox.visibility = View.GONE; return }
-        rectifiedLabel.text = if (open) s.measureWarped else s.measureWarpedAll.format(targets.size)
-        val type = filmType
-        val generation = ++rectifiedGeneration
-        Thread {
-            val result = runCatching {
-                for (e in targets) {
-                    val c = e.corners!!
-                    if (e.reading == null || e.readingCorners?.contentEquals(c) != true) { e.reading = ChartReader.read(e.bitmap, c, type); e.readingCorners = c.clone() }
-                }
-                ChartReader.averageWarped(targets.map { it.reading!! })
-            }
-            mainHandler.post {
-                if (generation != rectifiedGeneration) return@post
-                result.onSuccess { measureWarped.setImageBitmap(it); rectifiedBox.visibility = View.VISIBLE }
-                    .onFailure { rectifiedBox.visibility = View.GONE }
-            }
-        }.start()
-    }
-
-    private fun selectChartPhoto(index: Int) {
-        val entry = chartPhotos.getOrNull(index) ?: return
-        chartCurrent = index
-        cornerPick.joinMarkers = filmType.monochrome
-        cornerPick.bitmap = entry.bitmap
-        val marks = if (filmType.monochrome) entry.corners else entry.anchors
-        marks?.let { c -> for (k in 0 until 4) cornerPick.corners += floatArrayOf(c[2 * k], c[2 * k + 1]) }
-        cornerPick.outline = if (filmType.monochrome) null else entry.corners
-        cornerPick.invalidate()
-        for (e in chartPhotos) refreshChartThumb(e)
-        entry.thumb?.let { t -> chartStripScroll.post { chartStripScroll.smoothScrollTo(t.left - ui.dp(20), 0) } }
-        markPanel.visibility = View.VISIBLE
-        syncMeasureButtons()
-        updateRectified()
-    }
-
-    /** Selected: accent frame; without corners: dimmed, so the ones to fix stand out. */
-    private fun refreshChartThumb(entry: ChartPhoto) {
-        val t = entry.thumb ?: return
-        val selected = chartPhotos.indexOf(entry) == chartCurrent
-        t.alpha = if (entry.complete) 1f else 0.45f
-        t.background = ui.rounded(if (selected) ui.accent else Ui.CARD, 12)
-    }
-
-    private fun addChartPhoto(bitmap: Bitmap, corners: FloatArray?, select: Boolean) {
-        val entry = ChartPhoto(bitmap, corners)
-        chartPhotos += entry
-        val thumb = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            clipToOutline = true
-            setPadding(ui.dp(3), ui.dp(3), ui.dp(3), ui.dp(3))
-            setImageBitmap(Photos.scaledForEditing(bitmap, 160))
-            setOnClickListener { selectChartPhoto(chartPhotos.indexOf(entry)) }
-            setOnLongClickListener { removeChartPhoto(entry); true }
-            tooltipText = s.measureStripHint
-        }
-        entry.thumb = thumb
-        chartStrip.addView(thumb, LinearLayout.LayoutParams(ui.dp(72), ui.dp(72)).apply { marginEnd = ui.dp(8) })
-        refreshChartThumb(entry)
-        hideMeasureResult()
-        if (select || chartCurrent < 0) selectChartPhoto(chartPhotos.size - 1) else { syncMeasureButtons(); updateRectified() }
-    }
-
-    private fun removeChartPhoto(entry: ChartPhoto) {
-        val index = chartPhotos.indexOf(entry)
-        if (index < 0) return
-        chartPhotos.removeAt(index)
-        chartStrip.removeView(entry.thumb)
-        hideMeasureResult()
-        when {
-            chartPhotos.isEmpty() -> { chartCurrent = -1; cornerPick.bitmap = null; cornerPick.outline = null }
-            index == chartCurrent -> selectChartPhoto(minOf(index, chartPhotos.size - 1))
-            index < chartCurrent -> chartCurrent--
-        }
-        syncMeasureButtons()
-        updateRectified()
-    }
-
-    /** Several photos at once: they are loaded and aligned in the background, and appear in the strip as they come. */
-    private fun pickChartPhoto() {
-        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Intent(MediaStore.ACTION_PICK_IMAGES).putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 10)
-        } else {
-            Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-        }
-        startActivityForResult(intent, REQUEST_PICK_CHART)
-    }
-
-    /**
-     * Take the photo with the camera app, into a private cache file served by [CaptureProvider].
-     * The write grant only covers the URIs in the intent's clip data, not the output extra, so the
-     * URI goes in both.
-     */
-    private fun shootChartPhoto() {
-        val (file, uri) = CaptureProvider.newCapture(this)
-        shootUri = uri
-        prefs.edit().putString(PREF_SHOOT, uri.toString()).apply()
-        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-            .putExtra(MediaStore.EXTRA_OUTPUT, uri)
-            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        intent.clipData = ClipData.newRawUri("chart", uri)
-        measureStatus("")
-        try {
-            startActivityForResult(intent, REQUEST_SHOOT_CHART)
-            journal("chart photo: camera started for $uri")
-        } catch (e: Exception) {
-            shootUri = null
-            prefs.edit().remove(PREF_SHOOT).apply()
-            file.delete()
-            measureStatus(s.measureFailed.format(e.message ?: e.javaClass.simpleName))
-        }
-    }
-
-    /** What went wrong with the chart photo: a toast like any other message. */
-    private fun measureStatus(text: String) = message(text)
-
-    private fun loadChartPhotos(uris: List<Uri>) {
-        if (uris.isEmpty()) return
-        setBusy(true)
-        val type = filmType
-        Thread {
-            var found = 0; var failed = 0
-            for ((i, uri) in uris.withIndex()) {
-                val result = runCatching {
-                    val bitmap = Photos.scaledForEditing(Photos.load(contentResolver, uri), CHART_PHOTO_SIDE)
-                    bitmap to runCatching { ChartReader.detectCorners(bitmap, type) }.getOrNull()
-                }
-                mainHandler.post {
-                    result.onSuccess { (bitmap, corners) ->
-                        if (corners != null) found++
-                        addChartPhoto(bitmap, corners, select = i == 0)
-                        journal("chart photo: loaded ${bitmap.width}x${bitmap.height}, corners ${corners?.joinToString { Math.round(it).toString() } ?: "not found"}")
-                    }.onFailure { failed++; journal("chart photo: $uri: $it") }
-                }
-            }
-            mainHandler.post {
-                setBusy(false)
-                when {
-                    failed > 0 -> measureStatus(s.photoError.format("$failed / ${uris.size}"))
-                    uris.size == 1 && found == 1 -> toast(s.measureCornersFound)
-                    uris.size > 1 -> toast(s.measureLoaded.format(uris.size, found))
-                }
-            }
-        }.start()
-    }
-
-    private fun runMeasure() {
-        val entries = chartPhotos.filter { it.complete }
-        if (entries.isEmpty()) return
-        val type = filmType
-        setBusy(true)
-        Thread {
-            val result = runCatching {
-                for (e in entries) {
-                    val c = e.corners!!
-                    if (e.reading == null || e.readingCorners?.contentEquals(c) != true) { e.reading = ChartReader.read(e.bitmap, c, type); e.readingCorners = c.clone() }
-                }
-                val reading = ChartReader.average(entries.map { it.reading!! })
-                val geometries = entries.mapNotNull { runCatching { ChartReader.measureGeometry(it.bitmap, it.corners!!) }.getOrNull() }
-                val geo = if (geometries.isEmpty()) null else FloatArray(2) { c -> geometries.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
-                Triple(reading, ChartReader.fit(reading, type), geo)
-            }
-            mainHandler.post {
-                setBusy(false)
-                result.onSuccess { (reading, fit, geo) ->
-                    val model = fit.model
-                    measuredFilm = model
-                    measuredGeometry = geo
-                    markPanel.visibility = View.GONE
-                    syncMeasureButtons()
-                    updateRectified()
-                    val count = entries.size
-                    val geoText = geo?.let { g -> "\n" + s.measureGeometry.format(describeGeometry(PrinterGeometry(g[0], g[1]))) } ?: ""
-                    measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText
-                    measureCompare.setImageBitmap(comparisonStrip(reading, model))
-                    val colour = !type.monochrome && reading.patches.isNotEmpty()
-                    measureColourBox.visibility = if (colour) View.VISIBLE else View.GONE
-                    if (colour) {
-                        measureColourReport.text = s.measureColours.format("%.1f %%".format(fit.colourRmsBefore), "%.1f %%".format(fit.colourRmsAfter), describeHues(model))
-                        measureColourCompare.setImageBitmap(patchStrip(reading, model))
-                    }
-                    measureResultBox.visibility = View.VISIBLE
-                    journal("chart measured: greys %.1f %%, colours %.1f -> %.1f %%, hues %s, paper white %s".format(
-                        fit.greyRms, fit.colourRmsBefore, fit.colourRmsAfter, describeHues(model), reading.paperWhite.joinToString { Math.round(it).toString() }))
-                }.onFailure { message(s.measureFailed.format(it.message ?: it.javaClass.simpleName)) }
-            }
-        }.start()
-    }
-
-    /** Two rows of 11 grey steps: measured on the print above, simulated by the fitted model below. */
-    private fun comparisonStrip(reading: ChartReader.Reading, model: FilmModel): Bitmap {
-        val n = reading.greys.size
-        val cell = 40
-        val bitmap = Bitmap.createBitmap(n * cell, 2 * cell, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val paint = Paint()
-        for (i in 0 until n) {
-            val g = reading.greys[i]
-            paint.color = Color.rgb(Math.round(g[0].coerceIn(0f, 1f) * 255), Math.round(g[1].coerceIn(0f, 1f) * 255), Math.round(g[2].coerceIn(0f, 1f) * 255))
-            canvas.drawRect(i * cell.toFloat(), 0f, (i + 1) * cell.toFloat(), cell.toFloat(), paint)
-            val v = Math.round(i * 255f / (n - 1))
-            val px = intArrayOf(Color.rgb(v, v, v))
-            model.simulate(px)
-            paint.color = px[0]
-            canvas.drawRect(i * cell.toFloat(), cell.toFloat(), (i + 1) * cell.toFloat(), 2 * cell.toFloat(), paint)
-        }
-        return bitmap
-    }
-
-    /** Two rows of the 16 colour patches: measured on the print above, simulated by the fitted model below. */
-    private fun patchStrip(reading: ChartReader.Reading, model: FilmModel): Bitmap {
-        val n = reading.patches.size
-        val cell = 40
-        val bitmap = Bitmap.createBitmap(n * cell, 2 * cell, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val paint = Paint()
-        for (i in 0 until n) {
-            val g = reading.patches[i]
-            paint.color = Color.rgb(Math.round(g[0].coerceIn(0f, 1f) * 255), Math.round(g[1].coerceIn(0f, 1f) * 255), Math.round(g[2].coerceIn(0f, 1f) * 255))
-            canvas.drawRect(i * cell.toFloat(), 0f, (i + 1) * cell.toFloat(), cell.toFloat(), paint)
-            val px = intArrayOf(TestChart.patches[i])
-            model.simulate(px)
-            paint.color = px[0]
-            canvas.drawRect(i * cell.toFloat(), cell.toFloat(), (i + 1) * cell.toFloat(), 2 * cell.toFloat(), paint)
-        }
-        return bitmap
-    }
-
-    /** The hue tables, one sector per line: hue shift, saturation gain, brightness gain; or "none". */
-    private fun describeHues(model: FilmModel): String {
-        if (!model.hueCorrected) return s.calHuesNone
-        return (0 until FilmModel.HUES).joinToString("\n") { k ->
-            "%s  %+.0f°   %s ×%.2f   %s ×%.2f".format(FilmModel.HUE_NAMES[k], model.hueShift[k], s.calHueSat, model.hueGain[k], s.calHueLum, model.hueValue[k])
-        }
-    }
-
-    private fun applyMeasured() {
-        val model = measuredFilm ?: return
-        film = model
-        film.save(prefs)
-        measuredGeometry?.let { g ->
-            geometry.stepTop = g[0]; geometry.gradientBottom = g[1]
-            geometry.save(prefs)
-        }
-        syncCalibration()
-        applyFilmModel()
-        refreshChart()
-        refreshPreview()
-        toast(s.measureApplied)
-        show(calibrateView)
     }
 
     // ---------------------------------------------------------------- Collage
@@ -1579,57 +1070,14 @@ class MainActivity : Activity() {
         show(homeView)
     }
 
-    // ---------------------------------------------------------------- History and export
-
-    private fun buildHistory(): View {
-        val root = ui.column(20)
-        historyList = ui.column()
-        root.addView(historyList, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        return fixedHeaderScreen(titleBar(s.historyTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 }), root)
-    }
-
-    private fun refreshHistory() {
-        historyList.removeAllViews()
-        val files = Jobs.list(Jobs.historyDir(this)).reversed()
-        if (files.isEmpty()) {
-            historyList.addView(ui.text(s.historyEmpty, 14f, alpha = 0.7f))
-            return
-        }
-        val format = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
-        for (file in files) {
-            val thumb = ImageView(this).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                background = ui.rounded(Ui.CARD, 12)
-                clipToOutline = true
-                setImageBitmap(Jobs.thumbnail(file, 240))
-            }
-            val info = ui.column().apply {
-                addView(ui.text(format.format(Date(Jobs.time(file))), 13f, bold = true))
-                addView(ui.row(
-                    ui.softButton(s.reprint) { if (connected == null) message(s.notConnectedYet) else startPrinting(listOf(file), archive = false) },
-                    ui.softButton(s.share) { Jobs.load(file)?.let { exportAndShare(it) } },
-                    gap = 6,
-                ), LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
-                addView(ui.softButton(s.remove) {
-                    AlertDialog.Builder(this@MainActivity).setMessage(s.deleteEntry).setNegativeButton(s.cancel, null)
-                        .setPositiveButton(s.remove) { _, _ -> file.delete(); refreshHistory() }.show()
-                }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
-            }
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(thumb, LinearLayout.LayoutParams(ui.dp(96), ui.dp(96)).apply { marginEnd = ui.dp(12) })
-                addView(info, LinearLayout.LayoutParams(0, ui.wrap, 1f))
-            }
-            historyList.addView(ui.card(row, padding = 12), LinearLayout.LayoutParams(ui.match, ui.wrap).apply { bottomMargin = ui.dp(10) })
-        }
-    }
+    // ---------------------------------------------------------------- Export
 
     private fun exportCurrent() {
         val bitmap = photo ?: return message(s.noPhoto)
         exportAndShare(PrintRenderer.render(bitmap, editState, PREVIEW_SIZE))
     }
 
-    private fun exportAndShare(rendered: Bitmap) {
+    internal fun exportAndShare(rendered: Bitmap) {
         val uri = Jobs.exportToGallery(this, rendered)
         if (uri == null) return message(s.exportFailed)
         toast(s.exported)
@@ -2482,33 +1930,6 @@ class MainActivity : Activity() {
         show(homeView)
     }
 
-    // ---------------------------------------------------------------- Guide screen
-
-    private fun buildGuide(): View {
-        val root = ui.column(20)
-        root.addView(ui.text(s.guideIntro, 15f))
-        ui.space(root, 16)
-        s.guideSteps.forEachIndexed { i, step ->
-            val number = ui.text("${i + 1}", 16f, bold = true, color = ui.accent)
-            val body = ui.text(step, 15f)
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(number, LinearLayout.LayoutParams(ui.dp(28), ui.wrap))
-                addView(body, LinearLayout.LayoutParams(0, ui.wrap, 1f))
-            }
-            root.addView(ui.card(row, padding = 14))
-            ui.space(root, 8)
-        }
-        ui.space(root, 8)
-        root.addView(ui.text(s.guideNotes, 13f, alpha = 0.7f))
-        ui.space(root, 20)
-        root.addView(ui.card(ui.text(s.guideFilmTitle, 16f, bold = true), ui.text(s.guideFilm, 14f).apply { setPadding(0, ui.dp(6), 0, 0) }))
-        ui.space(root, 20)
-        root.addView(ui.primaryButton(s.wifiSettings) { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 8)
-        return fixedHeaderScreen(titleBar(s.guideTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 }), root)
-    }
-
     // ---------------------------------------------------------------- Printing
 
     /** The data for the printer: the look, pre-warped for the printer's geometry, sharpened for the film, then the inverse film model when compensation is on. */
@@ -2529,6 +1950,22 @@ class MainActivity : Activity() {
         editorView.film = film
         editorView.compensated = compensate
         applyGeometry()
+    }
+
+    /** A measured calibration (and geometry, if measured) becomes the current film's, saved and shown everywhere. */
+    internal fun applyMeasuredCalibration(model: FilmModel, geo: FloatArray?) {
+        film = model
+        film.save(prefs)
+        if (geo != null) {
+            geometry.stepTop = geo[0]; geometry.gradientBottom = geo[1]
+            geometry.save(prefs)
+        }
+        syncCalibration()
+        applyFilmModel()
+        refreshChart()
+        refreshPreview()
+        toast(s.measureApplied)
+        show(calibrateView)
     }
 
     /** The bands the frame will hide, on the home preview and in the editor, and the calibration readout. */
@@ -2631,7 +2068,7 @@ class MainActivity : Activity() {
     }
 
     /** Hand a list of rendered files to the foreground service. */
-    private fun startPrinting(files: List<File>, archive: Boolean = true) {
+    internal fun startPrinting(files: List<File>, archive: Boolean = true) {
         if (!printing.compareAndSet(false, true)) return message(s.busy)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -2691,7 +2128,7 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Journal
 
     /** Append a line to the journal from any thread. */
-    private fun journal(text: String) {
+    internal fun journal(text: String) {
         val line = "${timeFormat.format(Date())} $text"
         val snapshot: String
         synchronized(journalLock) {

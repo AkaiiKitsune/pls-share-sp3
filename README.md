@@ -163,7 +163,10 @@ core/src/main/kotlin/instax/
   DesktopImages.kt  redimensionnement java.awt pour la CLI
   cli/Main.kt       instax-print
 app/src/main/kotlin/io/github/akaiikitsune/plsshare/
-  MainActivity.kt    accueil, éditeur, guide, menu, impression
+  MainActivity.kt    accueil, éditeur, calibration, collage, menu, impression
+  MeasureScreen.kt   écran de mesure de la mire (photos, repères, lectures, ajustement)
+  GuideScreen.kt     guide de connexion
+  HistoryScreen.kt   historique des tirages
   PrinterWatcher.kt  détection automatique de l'imprimante sur le Wi-Fi courant
   PrinterNetwork.kt  sockets liés au Wi-Fi courant (ou demandé en debug)
   PhotoEditorView.kt zoom / déplacement au doigt
