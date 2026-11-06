@@ -302,9 +302,13 @@ class FilmModel(
      */
     fun inverseToneCurve(forward: IntArray): IntArray {
         val inverse = IntArray(256)
+        // Levels brighter than the film's white all map to the input where the white plateau
+        // starts, never to 255: a clipped channel must not jump away from its neighbours.
+        val top = forward[255]
         var j = 0
         for (target in 0..255) {
-            while (j < 255 && forward[j] < target) j++
+            val wanted = minOf(target, top)
+            while (j < 255 && forward[j] < wanted) j++
             inverse[target] = j
         }
         return inverse
