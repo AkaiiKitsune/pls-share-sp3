@@ -11,9 +11,9 @@ import android.provider.OpenableColumns
 import java.io.File
 
 /**
- * Serves files of the app's private `capture` cache directory to the camera app, so a photo of the
- * test chart can be taken straight into the app without a library file provider and without
- * leaving a copy in the user's gallery. Not exported: the camera only gets the one URI it is
+ * Serves files of the app's private `capture` cache directory to other apps: the camera app gets a
+ * file to write a photo of the test chart into (no library file provider, no copy left in the
+ * gallery), and the share sheet gets the exported settings file. Not exported: the camera only gets the one URI it is
  * granted through the capture intent's clip data.
  */
 class CaptureProvider : ContentProvider() {
@@ -27,6 +27,8 @@ class CaptureProvider : ContentProvider() {
             val file = File(dir(context), "chart-${System.currentTimeMillis()}.jpg")
             return file to Uri.Builder().scheme("content").authority(AUTHORITY).appendPath(file.name).build()
         }
+
+        fun uriFor(file: File): Uri = Uri.Builder().scheme("content").authority(AUTHORITY).appendPath(file.name).build()
 
         fun fileFor(context: Context, uri: Uri): File? {
             if (uri.authority != AUTHORITY) return null
@@ -43,7 +45,7 @@ class CaptureProvider : ContentProvider() {
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode))
     }
 
-    override fun getType(uri: Uri): String = "image/jpeg"
+    override fun getType(uri: Uri): String = if (uri.lastPathSegment?.endsWith(".json") == true) "application/json" else "image/jpeg"
 
     override fun query(uri: Uri, projection: Array<String>?, selection: String?, selectionArgs: Array<String>?, sortOrder: String?): Cursor {
         val file = fileFor(context!!, uri)

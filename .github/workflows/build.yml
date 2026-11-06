@@ -36,6 +36,8 @@ jobs:
       APP_VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history, for the list of changes in the nightly notes
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -78,6 +80,22 @@ jobs:
 
       # Every push to the main development branch refreshes the rolling "nightly" pre-release,
       # so the APK is always one click away and the in-app updater can find it.
+      - name: List the changes since the previous nightly
+        id: changes
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !startsWith(github.ref, 'refs/tags/')
+        run: |
+          git fetch origin +refs/tags/nightly:refs/tags/nightly-previous 2>/dev/null || true
+          if git rev-parse -q --verify nightly-previous >/dev/null; then
+            LOG=$(git log --format='- %s' nightly-previous..HEAD | head -40)
+          else
+            LOG=$(git log --format='- %s' -n 10)
+          fi
+          [ -n "$LOG" ] || LOG="- (aucun changement listé)"
+          {
+            echo "log<<EOF"
+            echo "$LOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Move the nightly tag to this commit
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !startsWith(github.ref, 'refs/tags/')
         run: |
@@ -99,6 +117,8 @@ jobs:
           name: Nightly build ${{ github.run_number }}
           prerelease: true
           body: |
+            ${{ steps.changes.outputs.log }}
+
             Build automatique du commit ${{ github.sha }} (branche `${{ github.ref_name }}`).
             Installez l'APK ci-dessous, ou laissez l'application se mettre à jour toute seule.
           files: ${{ steps.apk.outputs.name }}

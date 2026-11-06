@@ -80,6 +80,9 @@ class MainActivity : Activity() {
         private const val REQUEST_PICK_CELL = 4
         private const val REQUEST_PICK_CHART = 11
         private const val REQUEST_SHOOT_CHART = 12
+        private const val REQUEST_IMPORT_SETTINGS = 13
+        private const val MENU_SETTINGS_EXPORT = 11
+        private const val MENU_SETTINGS_IMPORT = 12
         /** Longest side of the chart photo the reader works on (enough for 9×9 samples per patch). */
         private const val CHART_PHOTO_SIDE = 2000
         private const val JOURNAL_LINES = 400
@@ -132,6 +135,10 @@ class MainActivity : Activity() {
     private lateinit var measureColourCompare: ImageView
     private lateinit var hueReadout: TextView
     private var measuredFilm: FilmModel? = null
+    /** Readings of every photo measured so far, keyed by the photo, averaged before the fit. */
+    private val chartReadings = LinkedHashMap<Bitmap, ChartReader.Reading>()
+    private lateinit var measureWarped: ImageView
+    private lateinit var measureWarpedLabel: TextView
     private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
     private lateinit var film: FilmModel
@@ -281,6 +288,7 @@ class MainActivity : Activity() {
         handleShareIntent(intent)
 
         updater = Updater(this, s) { journal(it) }
+        publishShareShortcut()
         mainHandler.postDelayed({ updater.checkDaily() }, 3_000)
     }
 
@@ -492,6 +500,8 @@ class MainActivity : Activity() {
         menu.menu.add(0, MENU_HISTORY, 2, s.menuHistory)
         menu.menu.add(0, MENU_COLLAGE, 3, s.menuCollage)
         menu.menu.add(0, MENU_EXPORT, 3, s.menuExport)
+        menu.menu.add(0, MENU_SETTINGS_EXPORT, 3, s.menuSettingsExport)
+        menu.menu.add(0, MENU_SETTINGS_IMPORT, 3, s.menuSettingsImport)
         menu.menu.add(0, MENU_UPDATE, 4, s.menuUpdate)
         menu.menu.add(0, MENU_CALIBRATE, 5, s.menuCalibrate)
         menu.menu.add(0, MENU_COMPENSATE, 6, s.menuCompensate).apply { isCheckable = true; isChecked = compensate }
@@ -503,6 +513,8 @@ class MainActivity : Activity() {
                 MENU_PIN -> askPin()
                 MENU_HISTORY -> { refreshHistory(); show(historyView) }
                 MENU_EXPORT -> exportCurrent()
+                MENU_SETTINGS_EXPORT -> exportSettings()
+                MENU_SETTINGS_IMPORT -> startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQUEST_IMPORT_SETTINGS)
                 MENU_COLLAGE -> show(collageView)
                 MENU_UPDATE -> updater.check(interactive = true) { message(it) }
                 MENU_DEBUG -> {
@@ -701,6 +713,7 @@ class MainActivity : Activity() {
             }.start()
         }
         if (requestCode == REQUEST_PICK_CHART && resultCode == RESULT_OK && data?.data != null) loadChartPhoto(data.data!!)
+        if (requestCode == REQUEST_IMPORT_SETTINGS && resultCode == RESULT_OK && data?.data != null) importSettings(data.data!!)
         if (requestCode == REQUEST_SHOOT_CHART) {
             // The camera app is heavy: this process is often killed meanwhile, so the pending
             // entry is remembered in the preferences, not only in a field.
@@ -826,14 +839,9 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Film calibration
 
     private fun buildCalibration(): View {
-        val root = ui.column(20)
-        root.addView(ui.text(s.calibrateIntro, 14f))
-        ui.space(root, 8)
-        monoNoteView = ui.text(s.monoNote, 13f, alpha = 0.7f)
-        root.addView(monoNoteView)
-        ui.space(root, 12)
-        root.addView(ui.text(s.chartSimulated, 13f, alpha = 0.7f))
-        ui.space(root, 6)
+        // Fixed part: the simulated chart with its actions beside it, so hand edits below are
+        // seen while sliding. The explanations fold away behind a help button.
+        val fixed = ui.column(20).apply { setPadding(ui.dp(20), ui.dp(12), ui.dp(20), ui.dp(12)) }
         chartView = object : ImageView(this) {
             override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
                 val w = MeasureSpec.getSize(widthMeasureSpec)
@@ -843,13 +851,42 @@ class MainActivity : Activity() {
             scaleType = ImageView.ScaleType.FIT_CENTER
             background = ui.rounded(Ui.CARD, 12)
             clipToOutline = true
+            contentDescription = s.chartSimulated
+            tooltipText = s.chartSimulated
         }
-        root.addView(chartView, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 10)
-        root.addView(ui.softButton(s.printChart) { printChart() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 8)
-        root.addView(ui.softButton(s.measureFromPhoto) { openMeasure() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 16)
+        lateinit var helpPanel: View
+        lateinit var helpButton: Button
+        var helpDefaultColor = 0
+        helpButton = ui.softButton(s.calibrateHelp) {
+            helpPanel.visibility = if (helpPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            helpButton.setTextColor(if (helpPanel.visibility == View.VISIBLE) ui.accent else helpDefaultColor)
+        }
+        helpDefaultColor = helpButton.currentTextColor
+        val actions = ui.column().apply {
+            addView(ui.softButton(s.printChart) { printChart() }.apply { tooltipText = s.printChartTip }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+            addView(ui.softButton(s.measureFromPhoto) { openMeasure() }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
+            addView(helpButton, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
+        }
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(chartView, LinearLayout.LayoutParams(0, ui.wrap, 0.42f))
+            addView(actions, LinearLayout.LayoutParams(0, ui.wrap, 0.58f).apply { marginStart = ui.dp(14) })
+        }
+        fixed.addView(top, LinearLayout.LayoutParams(ui.match, ui.wrap))
+
+        val root = ui.column(20)
+        helpPanel = ui.column().apply {
+            visibility = View.GONE
+            addView(ui.text(s.calibrateIntro, 13f, alpha = 0.8f))
+            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(8)))
+            addView(ui.text(s.compensateHint, 13f, alpha = 0.7f))
+            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(12)))
+        }
+        root.addView(helpPanel, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        monoNoteView = ui.text(s.monoNote, 13f, alpha = 0.7f)
+        root.addView(monoNoteView)
+        ui.space(root, 12)
 
         fun calSlider(label: String, min: Int, max: Int, read: () -> Int, colourOnly: Boolean = false, write: (Int) -> Unit) {
             val value = ui.text(read().toString(), 13f, alpha = 0.7f).apply { gravity = Gravity.END }
@@ -912,11 +949,13 @@ class MainActivity : Activity() {
             onFilmChanged()
         }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 16)
-        root.addView(ui.text(s.compensateHint, 13f, alpha = 0.7f))
-        ui.space(root, 16)
         val header = titleBar(s.calibrateTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 })
         calibrationTitle = header.getChildAt(0) as TextView
-        return fixedHeaderScreen(header, root)
+        val headerBlock = ui.column().apply {
+            addView(header, LinearLayout.LayoutParams(ui.match, ui.wrap))
+            addView(fixed, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        }
+        return fixedHeaderScreen(headerBlock, root)
     }
 
     private val calBars = ArrayList<Pair<SeekBar, () -> Int>>()
@@ -963,13 +1002,30 @@ class MainActivity : Activity() {
         root.addView(cornerPick, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 8)
         root.addView(ui.text(s.measureHint, 12f, alpha = 0.6f))
+        ui.space(root, 6)
+        root.addView(ui.text(s.measureAddHint, 12f, alpha = 0.6f))
         ui.space(root, 12)
-        measureResetButton = ui.softButton(s.measureReset) { cornerPick.reset(); hideMeasureResult() }
+        measureResetButton = ui.softButton(s.measureReset) { cornerPick.reset(); chartReadings.clear(); hideMeasureResult() }
         measureRunButton = ui.primaryButton(s.measureRun) { runMeasure() }
         root.addView(ui.row(measureResetButton, measureRunButton), LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 16)
 
         measureResultBox = ui.column().apply { visibility = View.GONE }
+        measureWarpedLabel = ui.text(s.measureWarped, 13f, alpha = 0.7f)
+        measureResultBox.addView(measureWarpedLabel)
+        ui.space(measureResultBox, 6)
+        measureWarped = object : ImageView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val w = MeasureSpec.getSize(widthMeasureSpec) / 2
+                setMeasuredDimension(w, w)
+            }
+        }.apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            background = ui.rounded(Ui.CARD, 12)
+            clipToOutline = true
+        }
+        measureResultBox.addView(measureWarped, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        ui.space(measureResultBox, 12)
         measureReport = ui.text("", 13f, alpha = 0.7f)
         measureResultBox.addView(measureReport)
         ui.space(measureResultBox, 8)
@@ -1066,15 +1122,22 @@ class MainActivity : Activity() {
     private fun loadChartPhoto(uri: Uri) {
         setBusy(true)
         Thread {
-            val result = runCatching { Photos.scaledForEditing(Photos.load(contentResolver, uri), CHART_PHOTO_SIDE) }
+            val result = runCatching {
+                val bitmap = Photos.scaledForEditing(Photos.load(contentResolver, uri), CHART_PHOTO_SIDE)
+                bitmap to runCatching { ChartReader.detectCorners(bitmap, filmType) }.getOrNull()
+            }
             mainHandler.post {
                 setBusy(false)
-                result.onSuccess {
-                    cornerPick.bitmap = it
+                result.onSuccess { (bitmap, corners) ->
+                    cornerPick.bitmap = bitmap
                     hideMeasureResult()
+                    if (corners != null) {
+                        for (k in 0 until 4) cornerPick.corners += floatArrayOf(corners[2 * k], corners[2 * k + 1])
+                        cornerPick.invalidate()
+                        toast(s.measureCornersFound)
+                    }
                     syncMeasureButtons()
-                    measureStatus("")
-                    journal("chart photo: loaded ${it.width}x${it.height}")
+                    journal("chart photo: loaded ${bitmap.width}x${bitmap.height}, corners ${corners?.joinToString { Math.round(it).toString() } ?: "not found"}")
                 }.onFailure { measureStatus(s.photoError.format(it.message ?: it.javaClass.simpleName)) }
             }
         }.start()
@@ -1087,15 +1150,20 @@ class MainActivity : Activity() {
         setBusy(true)
         Thread {
             val result = runCatching {
-                val reading = ChartReader.read(photo, corners, type)
-                reading to ChartReader.fit(reading, type)
+                val own = ChartReader.read(photo, corners, type)
+                synchronized(chartReadings) { chartReadings[photo] = own }
+                val all = synchronized(chartReadings) { chartReadings.values.toList() }
+                val reading = ChartReader.average(all)
+                Triple(own, reading, ChartReader.fit(reading, type))
             }
             mainHandler.post {
                 setBusy(false)
-                result.onSuccess { (reading, fit) ->
+                result.onSuccess { (own, reading, fit) ->
                     val model = fit.model
                     measuredFilm = model
-                    measureReport.text = s.measureResult.format("%.1f %%".format(fit.greyRms))
+                    measureWarped.setImageBitmap(own.warped)
+                    val count = chartReadings.size
+                    measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms))
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
                     val colour = !type.monochrome && reading.patches.isNotEmpty()
                     measureColourBox.visibility = if (colour) View.VISIBLE else View.GONE
@@ -1312,6 +1380,70 @@ class MainActivity : Activity() {
             Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             s.share,
         ))
+    }
+
+    // ---------------------------------------------------------------- Settings export / import
+
+    /** Both films' calibrations, the presets and the print options, as one JSON file to share. */
+    private fun settingsJson(): org.json.JSONObject {
+        val o = org.json.JSONObject()
+        o.put("app", "pls-share-sp3").put("version", 1).put("build", updater.currentBuild)
+        val films = org.json.JSONObject()
+        for (type in FilmType.values()) films.put(type.key, FilmModel.load(prefs, type).toJson())
+        o.put("films", films)
+        o.put("presets", org.json.JSONArray(prefs.getString(Presets.KEY, null) ?: "[]"))
+        o.put("compensate", compensate)
+        o.put("filmType", filmType.key)
+        return o
+    }
+
+    private fun exportSettings() {
+        try {
+            val file = File(CaptureProvider.dir(this), "pls-share-sp3-settings.json")
+            file.writeText(settingsJson().toString(2))
+            val uri = CaptureProvider.uriFor(file)
+            startActivity(Intent.createChooser(
+                Intent(Intent.ACTION_SEND).setType("application/json").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    .apply { clipData = ClipData.newRawUri("settings", uri) },
+                s.menuSettingsExport,
+            ))
+            journal("settings exported")
+        } catch (e: Exception) {
+            message(s.settingsExportFailed.format(e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    private fun importSettings(uri: Uri) {
+        val parsed = runCatching {
+            val text = contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
+            org.json.JSONObject(text)
+        }.getOrElse { return message(s.settingsImportFailed.format(it.message ?: it.javaClass.simpleName)) }
+        if (parsed.optString("app") != "pls-share-sp3") return message(s.settingsImportFailed.format(s.settingsNotOurs))
+        AlertDialog.Builder(this)
+            .setMessage(s.settingsImportConfirm)
+            .setNegativeButton(s.cancel, null)
+            .setPositiveButton(s.settingsImportDo) { _, _ ->
+                val films = parsed.optJSONObject("films")
+                var count = 0
+                for (type in FilmType.values()) {
+                    val fo = films?.optJSONObject(type.key) ?: continue
+                    FilmModel.fromJson(fo, type).save(prefs); count++
+                }
+                parsed.optJSONArray("presets")?.let { prefs.edit().putString(Presets.KEY, it.toString()).apply() }
+                if (parsed.has("compensate")) {
+                    compensate = parsed.optBoolean("compensate")
+                    prefs.edit().putBoolean(PREF_COMPENSATE, compensate).apply()
+                }
+                film = FilmModel.load(prefs, filmType)
+                chartBase = null
+                applyFilmModel()
+                refreshChart()
+                refreshPreview()
+                refreshPresetRow()
+                toast(s.settingsImported.format(count))
+                journal("settings imported from $uri")
+            }
+            .show()
     }
 
     private fun handleShareIntent(intent: Intent?) {
@@ -2122,7 +2254,7 @@ class MainActivity : Activity() {
         val pixels = IntArray(PREVIEW_SIZE * PREVIEW_SIZE)
         rendered.getPixels(pixels, 0, PREVIEW_SIZE, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE)
         if (film.printSharpness > 0f) Processing.unsharpMask(pixels, PREVIEW_SIZE, PREVIEW_SIZE, film.printSharpness / 100f * 1.2f)
-        if (compensate) film.compensate(pixels)
+        if (compensate) film.compensateDithered(pixels, PREVIEW_SIZE)
         rendered.setPixels(pixels, 0, PREVIEW_SIZE, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE)
         return rendered
     }
@@ -2145,6 +2277,27 @@ class MainActivity : Activity() {
         applyFilmModel()
         refreshPreview()
         if (container.getChildAt(0) === editorScreen) { buildThumbnails(editorView.bitmap ?: return); editorView.invalidateFrame() }
+    }
+
+    /**
+     * A sharing shortcut, so the app shows up as a direct target ("Print on SP-3") at the top of
+     * the share sheet of gallery apps. Matched with the share-target of res/xml/shortcuts.xml.
+     */
+    private fun publishShareShortcut() {
+        try {
+            val manager = getSystemService(android.content.pm.ShortcutManager::class.java) ?: return
+            val builder = android.content.pm.ShortcutInfo.Builder(this, "print")
+                .setShortLabel(s.shareShortcut)
+                .setLongLabel(s.shareShortcutLong)
+                .setIcon(android.graphics.drawable.Icon.createWithResource(this, R.mipmap.ic_launcher))
+                .setCategories(setOf("io.github.akaiikitsune.plsshare.SHARE_TARGET"))
+                .setIntent(Intent(Intent.ACTION_MAIN).setClass(this, MainActivity::class.java))
+                .setRank(0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) builder.setLongLived(true)
+            manager.dynamicShortcuts = listOf(builder.build())
+        } catch (e: Exception) {
+            journal("share shortcut: $e")
+        }
     }
 
     /** A small round swatch of the film's look: a hue wheel for colour film, a grey ramp for monochrome. */

@@ -163,6 +163,119 @@ object ChartReader {
 
     private fun luma(c: FloatArray) = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]
 
+    /** The mean of several readings of the same chart (different photos, lights or angles). */
+    fun average(readings: List<Reading>): Reading {
+        require(readings.isNotEmpty())
+        if (readings.size == 1) return readings[0]
+        fun mean(lists: List<FloatArray>): FloatArray = FloatArray(3) { c -> lists.map { it[c] }.average().toFloat() }
+        val greys = readings[0].greys.indices.map { i -> mean(readings.map { it.greys[i] }) }
+        val patches = readings[0].patches.indices.map { i -> mean(readings.map { it.patches[i] }) }
+        return Reading(greys, patches, mean(readings.map { it.printedWhite }), mean(readings.map { it.paperWhite }), readings[0].warped)
+    }
+
+    /**
+     * Find the image area of the printed chart in a photo, without any tap.
+     *
+     * The print is the bright region; everything dark that it encloses (the grey steps, the
+     * patches, the gradient, the corner marks) forms "holes" in it. The extreme hole pixels in the
+     * four diagonal directions are the outer corners of the corner marks, hence of the image area.
+     * Returns null when the four marks are not found there (a chart printed before the marks
+     * existed, a dark object on the table, glare): the user then taps the corners.
+     */
+    fun detectCorners(photo: Bitmap, type: FilmType): FloatArray? {
+        val scale = maxOf(1, maxOf(photo.width, photo.height) / 500)
+        val w = photo.width / scale
+        val h = photo.height / scale
+        if (w < 40 || h < 40) return null
+        val full = IntArray(photo.width * photo.height)
+        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
+        val luma = IntArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            val c = full[(y * scale + scale / 2) * photo.width + x * scale + scale / 2]
+            luma[y * w + x] = (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000
+        }
+        // Paper white: the 95th percentile of brightness.
+        val hist = IntArray(256)
+        for (v in luma) hist[v]++
+        var acc = 0; var paper = 255
+        for (v in 0..255) { acc += hist[v]; if (acc >= luma.size * 0.95) { paper = v; break } }
+        val bright = BooleanArray(w * h) { luma[it] > paper * 0.5f }
+        // Flood from the borders over the non-bright pixels: that is the outside (table, shadows).
+        val outside = BooleanArray(w * h)
+        val queue = IntArray(w * h)
+        var head = 0; var tail = 0
+        fun push(i: Int) { if (!bright[i] && !outside[i]) { outside[i] = true; queue[tail++] = i } }
+        for (x in 0 until w) { push(x); push((h - 1) * w + x) }
+        for (y in 0 until h) { push(y * w); push(y * w + w - 1) }
+        while (head < tail) {
+            val i = queue[head++]
+            val x = i % w; val y = i / w
+            if (x > 0) push(i - 1); if (x < w - 1) push(i + 1); if (y > 0) push(i - w); if (y < h - 1) push(i + w)
+        }
+        // Holes: dark pixels enclosed by the print, in components big enough not to be dust.
+        val label = IntArray(w * h)
+        var next = 0
+        val sizes = ArrayList<Int>()
+        for (start in 0 until w * h) {
+            if (bright[start] || outside[start] || label[start] != 0) continue
+            next++
+            label[start] = next
+            head = 0; tail = 0; queue[tail++] = start
+            var count = 0
+            while (head < tail) {
+                val i = queue[head++]; count++
+                val x = i % w; val y = i / w
+                for (j in intArrayOf(if (x > 0) i - 1 else -1, if (x < w - 1) i + 1 else -1, if (y > 0) i - w else -1, if (y < h - 1) i + w else -1)) {
+                    if (j >= 0 && !bright[j] && !outside[j] && label[j] == 0) { label[j] = next; queue[tail++] = j }
+                }
+            }
+            sizes += count
+        }
+        // Dust is a few pixels at this scale; the corner marks are small too, so the bar is low.
+        val minSize = maxOf(4, w * h / 40000)
+        var tl = -1; var tr = -1; var br = -1; var bl = -1
+        var sTl = Int.MAX_VALUE; var sTr = Int.MIN_VALUE; var sBr = Int.MIN_VALUE; var sBl = Int.MAX_VALUE
+        for (i in 0 until w * h) {
+            val l = label[i]
+            if (l == 0 || sizes[l - 1] < minSize) continue
+            val x = i % w; val y = i / w
+            if (x + y < sTl) { sTl = x + y; tl = i }
+            if (x - y > sTr) { sTr = x - y; tr = i }
+            if (x + y > sBr) { sBr = x + y; br = i }
+            if (x - y < sBl) { sBl = x - y; bl = i }
+        }
+        if (tl < 0) return null
+        fun pt(i: Int, dx: Float, dy: Float) = floatArrayOf(((i % w) + dx) * scale, ((i / w) + dy) * scale)
+        // Outer corners of the extreme pixels.
+        val quad = floatArrayOf(
+            pt(tl, 0f, 0f)[0], pt(tl, 0f, 0f)[1], pt(tr, 1f, 0f)[0], pt(tr, 1f, 0f)[1],
+            pt(br, 1f, 1f)[0], pt(br, 1f, 1f)[1], pt(bl, 0f, 1f)[0], pt(bl, 0f, 1f)[1],
+        )
+        val side = minOf(w, h) * scale
+        for (k in 0 until 4) {
+            val n = (k + 1) % 4
+            val len = Math.hypot((quad[2 * n] - quad[2 * k]).toDouble(), (quad[2 * n + 1] - quad[2 * k + 1]).toDouble())
+            if (len < side * 0.15) return null
+        }
+        // With corner marks, the quad is the image area: all four corner marks must read dark.
+        val hq = homography(quad)
+        fun darkAt(x: Double, y: Double): Boolean {
+            val p = map(hq, x, y)
+            val c = sample(full, photo.width, photo.height, p[0], p[1])
+            return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000 < paper * 0.5f
+        }
+        val f = TestChart.FIDUCIAL / 2.0
+        val marks = listOf(f to f, 1 - f to f, 1 - f to 1 - f, f to 1 - f).count { (x, y) -> darkAt(x, y) }
+        // …and they must be small squares in a white margin, not the corners of larger dark areas
+        // (the black step, a patch): just beside each mark, along both edges, it is white.
+        val beside = TestChart.FIDUCIAL * 1.7
+        val margins = listOf(
+            beside to f, f to beside, 1 - beside to f, 1 - f to beside,
+            1 - beside to 1 - f, 1 - f to 1 - beside, beside to 1 - f, f to 1 - beside,
+        ).count { (x, y) -> !darkAt(x, y) }
+        return if (marks == 4 && margins == 8) quad else null
+    }
+
     /** A fitted model with its errors, in percent of paper white (RMS over the steps or patches, per channel). */
     class Fit(val model: FilmModel, val greyRms: Double, val colourRmsBefore: Double, val colourRmsAfter: Double) {
         operator fun component1() = model

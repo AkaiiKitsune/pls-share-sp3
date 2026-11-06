@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sharing shortcut: the app is offered as a direct target in the share sheet for images.
+     The matching dynamic shortcut ("print") is published by MainActivity at start. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="io.github.akaiikitsune.plsshare.MainActivity">
+        <data android:mimeType="image/*" />
+        <category android:name="io.github.akaiikitsune.plsshare.SHARE_TARGET" />
+    </share-target>
+</shortcuts>

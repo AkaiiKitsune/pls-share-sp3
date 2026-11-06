@@ -131,6 +131,7 @@ class ScreenshotTest {
             val hues = MainActivity::class.java.getDeclaredMethod("describeHues", FilmModel::class.java).apply { isAccessible = true }
             (field(activity, "measureColourReport") as android.widget.TextView).text =
                 "Couleurs : erreur %.1f %% avec les réglages globaux, %.1f %% après correction par teinte.\n%s".format(fit.colourRmsBefore, fit.colourRmsAfter, hues.invoke(activity, model))
+            (field(activity, "measureWarped") as android.widget.ImageView).setImageBitmap(reading.warped)
             (field(activity, "measureResultBox") as View).visibility = View.VISIBLE
             val measure = field(activity, "measureView") as View
             shoot(measure, "09-measure", w, h, scrollTo = 300)

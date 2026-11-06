@@ -7,7 +7,7 @@ import org.json.JSONObject
 /** The user's own looks, saved as JSON in the preferences. */
 class Presets(private val prefs: SharedPreferences) {
     companion object {
-        private const val KEY = "presets"
+        const val KEY = "presets"
     }
 
     class Entry(val name: String, val look: EditState)

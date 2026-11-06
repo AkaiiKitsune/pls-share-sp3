@@ -190,8 +190,10 @@ class Strings private constructor(private val fr: Boolean) {
             "then adjust the sliders until the simulated chart on screen looks like the print. " +
             "Start with the greys (exposure, then blacks, whites and contrast), then saturation and cast, then the blue patch.",
     )
+    val calibrateHelp get() = t("Comment ça marche ?", "How does it work?")
     val chartSimulated get() = t("Mire simulée (ce que le tirage devrait montrer)", "Simulated chart (what the print should look like)")
-    val printChart get() = t("Imprimer la mire (sans compensation)", "Print the chart (no compensation)")
+    val printChart get() = t("Imprimer la mire", "Print the chart")
+    val printChartTip get() = t("La mire s'imprime toujours sans compensation.", "The chart always prints without compensation.")
     val calExposure get() = t("Exposition (centièmes d'IL)", "Exposure (hundredths of a stop)")
     val calGamma get() = t("Demi-tons (gamma ×100 : < 100 éclaircit)", "Midtones (gamma ×100: < 100 lifts)")
     val calBlack get() = t("Seuil des noirs (% d'entrée bouché)", "Black threshold (% of input blocked)")
@@ -205,7 +207,7 @@ class Strings private constructor(private val fr: Boolean) {
     val calBlue get() = t("Assombrissement des bleus", "Blue darkening")
     val calReset get() = t("Valeurs par défaut", "Default values")
     val measureTitle get() = t("Mesurer la mire", "Measure the chart")
-    val measureFromPhoto get() = t("Mesurer depuis une photo du tirage", "Measure from a photo of the print")
+    val measureFromPhoto get() = t("Mesurer une photo du tirage", "Measure a photo of the print")
     val measureIntro get() = t(
         "Imprimez la mire, photographiez le tirage à plat avec le cadre blanc entièrement visible, puis indiquez les quatre coins de la zone image. L'appli lit les gris et les couleurs, les rapporte au blanc du cadre (ce qui annule la lumière, jour ou flash) et en déduit les réglages du film.",
         "Print the chart, photograph the print flat with the white frame fully visible, then mark the four corners of the image area. The app reads the greys and colours, relates them to the frame's white (which cancels the light, daylight or flash) and derives the film settings.",
@@ -229,6 +231,20 @@ class Strings private constructor(private val fr: Boolean) {
     val measureApply get() = t("Appliquer ces valeurs", "Apply these values")
     val measureApplied get() = t("Calibration mesurée appliquée.", "Measured calibration applied.")
     val measureFailed get() = t("Mesure impossible : %s", "Could not measure: %s")
+    val measureWarped get() = t("Mire redressée : les paliers et les patches doivent tomber bien dans leurs cases, sinon ajustez les coins.", "Rectified chart: the steps and patches must sit squarely in their cells; otherwise adjust the corners.")
+    val measureCornersFound get() = t("Coins détectés, vérifiez-les.", "Corners detected, check them.")
+    val measurePhotos get() = t("Moyenne de %d photos.", "Average of %d photos.")
+    val measureAddHint get() = t("Pour affiner, chargez une autre photo du même tirage et mesurez de nouveau : les lectures sont moyennées. « Recommencer » les efface.", "To refine, load another photo of the same print and measure again: the readings are averaged. “Start over” clears them.")
+    val shareShortcut get() = t("Imprimer sur SP-3", "Print on SP-3")
+    val shareShortcutLong get() = t("Imprimer sur l'instax SHARE SP-3", "Print on the instax SHARE SP-3")
+    val menuSettingsExport get() = t("Exporter les réglages…", "Export settings…")
+    val menuSettingsImport get() = t("Importer des réglages…", "Import settings…")
+    val settingsExportFailed get() = t("Export impossible : %s", "Could not export: %s")
+    val settingsImportFailed get() = t("Import impossible : %s", "Could not import: %s")
+    val settingsNotOurs get() = t("ce fichier ne vient pas de cette application", "this file is not from this app")
+    val settingsImportConfirm get() = t("Remplacer les calibrations des deux films, les presets et l'option de compensation par ceux du fichier ?", "Replace both films' calibrations, the presets and the compensation option with the file's?")
+    val settingsImportDo get() = t("Importer", "Import")
+    val settingsImported get() = t("Réglages importés (%d calibrations).", "Settings imported (%d calibrations).")
     val measureEmptyCapture get() = t("l'appareil photo n'a rien enregistré", "the camera app saved nothing")
     val calPrintSharpness get() = t("Netteté ajoutée à l'impression (le film adoucit)", "Sharpening added at print time (the film softens)")
     val ratio get() = t("Format de la photo", "Photo ratio")

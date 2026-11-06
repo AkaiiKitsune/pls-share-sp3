@@ -93,6 +93,34 @@ class FilmModel(
             }.let { if (it < 0f) it + 360f else it }
         }
 
+        /** Float RGB (0..255) to hue (0..360), saturation and value (0..1), into [out]. */
+        fun rgbToHsv(r: Float, g: Float, b: Float, out: FloatArray) {
+            val max = maxOf(r, g, b)
+            val min = minOf(r, g, b)
+            val d = max - min
+            out[2] = max / 255f
+            out[1] = if (max <= 0f) 0f else d / max
+            out[0] = when {
+                d <= 0f -> 0f
+                max == r -> 60f * (((g - b) / d) % 6f)
+                max == g -> 60f * ((b - r) / d + 2f)
+                else -> 60f * ((r - g) / d + 4f)
+            }.let { if (it < 0f) it + 360f else it }
+        }
+
+        /** Hue, saturation, value to float RGB (0..255), into [out]. */
+        fun hsvToRgb(h: Float, s: Float, v: Float, out: FloatArray) {
+            val c = v * s
+            val hh = ((h % 360f + 360f) % 360f) / 60f
+            val x = c * (1f - Math.abs(hh % 2f - 1f))
+            val (r1, g1, b1) = when (hh.toInt()) {
+                0 -> Triple(c, x, 0f); 1 -> Triple(x, c, 0f); 2 -> Triple(0f, c, x)
+                3 -> Triple(0f, x, c); 4 -> Triple(x, 0f, c); else -> Triple(c, 0f, x)
+            }
+            val m = v - c
+            out[0] = ((r1 + m) * 255f).coerceIn(0f, 255f); out[1] = ((g1 + m) * 255f).coerceIn(0f, 255f); out[2] = ((b1 + m) * 255f).coerceIn(0f, 255f)
+        }
+
         /** Hue, saturation, value back to a packed RGB (alpha opaque). */
         fun hsvToRgb(h: Float, s: Float, v: Float): Int {
             val c = v * s
@@ -128,6 +156,22 @@ class FilmModel(
             )
         }
 
+        fun fromJson(o: org.json.JSONObject, type: FilmType): FilmModel {
+            val m = defaults(type)
+            fun f(key: String, default: Float) = o.optDouble(key, default.toDouble()).toFloat()
+            m.exposure = f("exposure", m.exposure); m.gamma = f("gamma", m.gamma)
+            m.blackClip = f("blackClip", m.blackClip); m.whiteClip = f("whiteClip", m.whiteClip)
+            m.blackLevel = f("blackLevel", m.blackLevel); m.whiteLevel = f("whiteLevel", m.whiteLevel)
+            m.shadowWarmth = f("shadowWarmth", m.shadowWarmth); m.saturation = f("saturation", m.saturation)
+            m.warmth = f("warmth", m.warmth); m.tint = f("tint", m.tint); m.blueDarkening = f("blueDarkening", m.blueDarkening)
+            m.printSharpness = f("printSharpness", m.printSharpness)
+            for ((key, table) in listOf("hueShift" to m.hueShift, "hueGain" to m.hueGain, "hueValue" to m.hueValue)) {
+                val a = o.optJSONArray(key) ?: continue
+                for (i in 0 until minOf(HUES, a.length())) table[i] = a.optDouble(i, table[i].toDouble()).toFloat()
+            }
+            return m
+        }
+
         fun load(prefs: SharedPreferences, type: FilmType): FilmModel {
             val m = defaults(type)
             val prefix = PREFIX + type.key + "."
@@ -155,6 +199,13 @@ class FilmModel(
         for (i in 0 until HUES) e.putFloat(prefix + "hueShift$i", hueShift[i]).putFloat(prefix + "hueGain$i", hueGain[i]).putFloat(prefix + "hueValue$i", hueValue[i])
         e.apply()
     }
+
+    fun toJson(): org.json.JSONObject = org.json.JSONObject()
+        .put("exposure", exposure.toDouble()).put("gamma", gamma.toDouble()).put("blackClip", blackClip.toDouble()).put("whiteClip", whiteClip.toDouble())
+        .put("blackLevel", blackLevel.toDouble()).put("whiteLevel", whiteLevel.toDouble()).put("shadowWarmth", shadowWarmth.toDouble())
+        .put("saturation", saturation.toDouble()).put("warmth", warmth.toDouble()).put("tint", tint.toDouble()).put("blueDarkening", blueDarkening.toDouble())
+        .put("printSharpness", printSharpness.toDouble())
+        .put("hueShift", org.json.JSONArray(hueShift.map { it.toDouble() })).put("hueGain", org.json.JSONArray(hueGain.map { it.toDouble() })).put("hueValue", org.json.JSONArray(hueValue.map { it.toDouble() }))
 
     fun copy() = FilmModel(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening, printSharpness, hueShift.clone(), hueGain.clone(), hueValue.clone())
 
@@ -325,13 +376,82 @@ class FilmModel(
         Processing.applyCurves(pixels, c[0], c[1], c[2])
     }
 
-    /** Apply the inverse model to pixels (print compensation), in reverse order. */
+    /** Apply the inverse model to pixels (print compensation): the fractional pipeline, rounded. */
     fun compensate(pixels: IntArray) {
-        val c = inverseToneCurves()
-        Processing.applyCurves(pixels, c[0], c[1], c[2])
-        darkenBlues(pixels, inverse = true)
-        applyMatrix(pixels, inverseColorMatrix())
-        hueCorrect(pixels, inverse = true)
+        val ctx = CompensationContext()
+        val rgb = FloatArray(3)
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            rgb[0] = ((p shr 16) and 0xFF).toFloat(); rgb[1] = ((p shr 8) and 0xFF).toFloat(); rgb[2] = (p and 0xFF).toFloat()
+            compensateFractional(rgb, ctx)
+            pixels[i] = (p and 0xFF000000.toInt()) or (Math.round(rgb[0]).coerceIn(0, 255) shl 16) or (Math.round(rgb[1]).coerceIn(0, 255) shl 8) or Math.round(rgb[2]).coerceIn(0, 255)
+        }
+    }
+
+    /** What [compensateFractional] needs and should not recompute per pixel. */
+    inner class CompensationContext {
+        val forward = toneCurves()
+        val inverseMatrix = inverseColorMatrix().array
+        val hsv = FloatArray(3)
+    }
+
+    /**
+     * The inverse model on one colour, in place, with fractional levels: for each wanted print
+     * level the input is interpolated between the two data levels that bracket it on the film's
+     * curve, so that dithering between those two levels averages to the wanted level on paper.
+     * Levels the film cannot reach map to the nearest end of its range.
+     */
+    fun compensateFractional(rgb: FloatArray, ctx: CompensationContext) {
+        for (c in 0 until 3) rgb[c] = inverseToneFractional(ctx.forward[c], rgb[c])
+        // Blue darkening, inverted.
+        val a = if (type.monochrome) 0f else blueDarkening * 0.6f
+        if (a > 0f) {
+            val blueness = (rgb[2] - (rgb[0] + rgb[1]) / 2f) / 255f
+            if (blueness > 0f) {
+                val disc = 1f - 4f * a * blueness
+                val factor = if (disc <= 0f) 0.5f else (1f + Math.sqrt(disc.toDouble()).toFloat()) / 2f
+                for (c in 0 until 3) rgb[c] = (rgb[c] / factor).coerceIn(0f, 255f)
+            }
+        }
+        // Colour matrix, inverted.
+        val m = ctx.inverseMatrix
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        rgb[0] = (m[0] * r + m[1] * g + m[2] * b + m[4]).coerceIn(0f, 255f)
+        rgb[1] = (m[5] * r + m[6] * g + m[7] * b + m[9]).coerceIn(0f, 255f)
+        rgb[2] = (m[10] * r + m[11] * g + m[12] * b + m[14]).coerceIn(0f, 255f)
+        // Per-hue correction, inverted.
+        if (!type.monochrome && hueCorrected) {
+            val hsv = ctx.hsv
+            rgbToHsv(rgb[0], rgb[1], rgb[2], hsv)
+            if (hsv[1] >= 0.03f) {
+                var sin = hsv[1]
+                var hin = hsv[0]
+                repeat(5) {
+                    val w = hueWeight(sin)
+                    hin = inverseHue(hsv[0], w)
+                    sin = (hsv[1] / gainAt(hin, w).coerceAtLeast(0.2f)).coerceIn(0f, 1f)
+                }
+                val v = (hsv[2] / valueFactor(hin, sin).coerceAtLeast(0.2f)).coerceIn(0f, 1f)
+                hsvToRgb(hin, sin, v, rgb)
+            }
+        }
+    }
+
+    /** The fractional input level that prints as [target] on a channel with the given forward curve. */
+    private fun inverseToneFractional(forward: IntArray, target: Float): Float {
+        val top = forward[255]
+        if (target <= forward[0]) return 0f
+        if (target >= top) {
+            // Out of the film's reach, or exactly its white: the first input that reaches the top.
+            var k = 0
+            while (k < 255 && forward[k] < top) k++
+            return k.toFloat()
+        }
+        var j = 0
+        while (j < 254 && forward[j + 1] < target) j++
+        // forward[j] < target <= forward[j+1].
+        if (forward[j + 1] <= forward[j]) return j.toFloat()
+        return j + (target - forward[j]) / (forward[j + 1] - forward[j])
     }
 
     /**
@@ -435,47 +555,131 @@ class FilmModel(
 
     object Lut {
         const val LUT_N = 33
+        const val PRINT_N = 65
         private val idx = IntArray(256)
         private val frac = IntArray(256)
+        private val idxP = IntArray(256)
+        private val fracP = IntArray(256)
 
         init {
+            fill(LUT_N, idx, frac)
+            fill(PRINT_N, idxP, fracP)
+        }
+
+        private fun fill(n: Int, idx: IntArray, frac: IntArray) {
             for (v in 0..255) {
-                val p = v * (LUT_N - 1) * 256 / 255 // fixed point 24.8 grid position
+                val p = v * (n - 1) * 256 / 255 // fixed point 24.8 grid position
                 var i = p shr 8
                 var f = p and 0xFF
-                if (i >= LUT_N - 1) { i = LUT_N - 2; f = 256 }
+                if (i >= n - 1) { i = n - 2; f = 256 }
                 idx[v] = i; frac[v] = f
             }
         }
 
+        /** Interleaved gradient noise (Jimenez), 0..255, tiled: cheap, evenly spread, no visible pattern. */
+        private const val NOISE = 128
+        private val noise = IntArray(NOISE * NOISE).also {
+            for (y in 0 until NOISE) for (x in 0 until NOISE) {
+                val f = 52.9829189 * ((0.06711056 * x + 0.00583715 * y) % 1.0)
+                it[y * NOISE + x] = ((f % 1.0) * 256).toInt().coerceIn(0, 255)
+            }
+        }
+
+        /** One trilinear sample, in 8.8 fixed point per channel, into [out] (r, g, b). */
+        private fun sample(lut: IntArray, n: Int, idx: IntArray, frac: IntArray, p: Int, out: LongArray) {
+            val nn = n * n
+            val r = (p shr 16) and 0xFF; val g = (p shr 8) and 0xFF; val b = p and 0xFF
+            val ri = idx[r]; val gi = idx[g]; val bi = idx[b]
+            val rf = frac[r]; val gf = frac[g]; val bf = frac[b]
+            val base = ri * nn + gi * n + bi
+            val c000 = lut[base]; val c001 = lut[base + 1]
+            val c010 = lut[base + n]; val c011 = lut[base + n + 1]
+            val c100 = lut[base + nn]; val c101 = lut[base + nn + 1]
+            val c110 = lut[base + nn + n]; val c111 = lut[base + nn + n + 1]
+            val w000 = (256 - rf) * (256 - gf) * (256 - bf); val w001 = (256 - rf) * (256 - gf) * bf
+            val w010 = (256 - rf) * gf * (256 - bf); val w011 = (256 - rf) * gf * bf
+            val w100 = rf * (256 - gf) * (256 - bf); val w101 = rf * (256 - gf) * bf
+            val w110 = rf * gf * (256 - bf); val w111 = rf * gf * bf
+            for (ch in 0 until 3) {
+                val sh = 16 - 8 * ch
+                out[ch] = (((c000 shr sh) and 0xFF).toLong() * w000 + ((c001 shr sh) and 0xFF).toLong() * w001 + ((c010 shr sh) and 0xFF).toLong() * w010 + ((c011 shr sh) and 0xFF).toLong() * w011 +
+                    ((c100 shr sh) and 0xFF).toLong() * w100 + ((c101 shr sh) and 0xFF).toLong() * w101 + ((c110 shr sh) and 0xFF).toLong() * w110 + ((c111 shr sh) and 0xFF).toLong() * w111) shr 16
+            }
+        }
+
+        /** Rounded trilinear application, for previews. */
         fun applyLut(pixels: IntArray, lut: IntArray) {
-            val n = LUT_N
+            val out = LongArray(3)
+            for (i in pixels.indices) {
+                val p = pixels[i]
+                sample(lut, LUT_N, idx, frac, p, out)
+                val nr = ((out[0] + 128) shr 8).toInt(); val ng = ((out[1] + 128) shr 8).toInt(); val nb = ((out[2] + 128) shr 8).toInt()
+                pixels[i] = (p and 0xFF000000.toInt()) or (nr.coerceIn(0, 255) shl 16) or (ng.coerceIn(0, 255) shl 8) or nb.coerceIn(0, 255)
+            }
+        }
+
+        /**
+         * Dithered trilinear application on the print grid, whose nodes hold 8.8 fractional levels
+         * per channel: the fraction of the interpolated level is resolved against the noise tile.
+         */
+        fun applyLutDithered(pixels: IntArray, width: Int, lut: Array<IntArray>, n: Int) {
             val nn = n * n
             for (i in pixels.indices) {
                 val p = pixels[i]
                 val r = (p shr 16) and 0xFF; val g = (p shr 8) and 0xFF; val b = p and 0xFF
-                val ri = idx[r]; val gi = idx[g]; val bi = idx[b]
-                val rf = frac[r]; val gf = frac[g]; val bf = frac[b]
+                val ri = idxP[r]; val gi = idxP[g]; val bi = idxP[b]
+                val rf = fracP[r]; val gf = fracP[g]; val bf = fracP[b]
                 val base = ri * nn + gi * n + bi
-                val c000 = lut[base]; val c001 = lut[base + 1]
-                val c010 = lut[base + n]; val c011 = lut[base + n + 1]
-                val c100 = lut[base + nn]; val c101 = lut[base + nn + 1]
-                val c110 = lut[base + nn + n]; val c111 = lut[base + nn + n + 1]
-                // Weights in 1/256 units for each corner, combined in 1/(256³) then shifted back.
-                val w000 = (256 - rf) * (256 - gf) * (256 - bf); val w001 = (256 - rf) * (256 - gf) * bf
-                val w010 = (256 - rf) * gf * (256 - bf); val w011 = (256 - rf) * gf * bf
-                val w100 = rf * (256 - gf) * (256 - bf); val w101 = rf * (256 - gf) * bf
-                val w110 = rf * gf * (256 - bf); val w111 = rf * gf * bf
-                val half = 1L shl 23
-                val nr = ((((c000 shr 16) and 0xFF).toLong() * w000 + ((c001 shr 16) and 0xFF).toLong() * w001 + ((c010 shr 16) and 0xFF).toLong() * w010 + ((c011 shr 16) and 0xFF).toLong() * w011 +
-                    ((c100 shr 16) and 0xFF).toLong() * w100 + ((c101 shr 16) and 0xFF).toLong() * w101 + ((c110 shr 16) and 0xFF).toLong() * w110 + ((c111 shr 16) and 0xFF).toLong() * w111 + half) shr 24).toInt()
-                val ng = ((((c000 shr 8) and 0xFF).toLong() * w000 + ((c001 shr 8) and 0xFF).toLong() * w001 + ((c010 shr 8) and 0xFF).toLong() * w010 + ((c011 shr 8) and 0xFF).toLong() * w011 +
-                    ((c100 shr 8) and 0xFF).toLong() * w100 + ((c101 shr 8) and 0xFF).toLong() * w101 + ((c110 shr 8) and 0xFF).toLong() * w110 + ((c111 shr 8) and 0xFF).toLong() * w111 + half) shr 24).toInt()
-                val nb = (((c000 and 0xFF).toLong() * w000 + (c001 and 0xFF).toLong() * w001 + (c010 and 0xFF).toLong() * w010 + (c011 and 0xFF).toLong() * w011 +
-                    (c100 and 0xFF).toLong() * w100 + (c101 and 0xFF).toLong() * w101 + (c110 and 0xFF).toLong() * w110 + (c111 and 0xFF).toLong() * w111 + half) shr 24).toInt()
-                pixels[i] = (p and 0xFF000000.toInt()) or (nr.coerceIn(0, 255) shl 16) or (ng.coerceIn(0, 255) shl 8) or nb.coerceIn(0, 255)
+                val w000 = (256 - rf).toLong() * (256 - gf) * (256 - bf); val w001 = (256 - rf).toLong() * (256 - gf) * bf
+                val w010 = (256 - rf).toLong() * gf * (256 - bf); val w011 = (256 - rf).toLong() * gf * bf
+                val w100 = rf.toLong() * (256 - gf) * (256 - bf); val w101 = rf.toLong() * (256 - gf) * bf
+                val w110 = rf.toLong() * gf * (256 - bf); val w111 = rf.toLong() * gf * bf
+                val x = i % width; val y = i / width
+                val t = noise[(y % NOISE) * NOISE + (x % NOISE)]
+                var packed = p and 0xFF000000.toInt()
+                for (c in 0 until 3) {
+                    val l = lut[c]
+                    // 8.8 values weighted by 24-bit weights: 32.8 fixed point, back to 8.8, then dithered to 8.
+                    val v = ((l[base] * w000 + l[base + 1] * w001 + l[base + n] * w010 + l[base + n + 1] * w011 +
+                        l[base + nn] * w100 + l[base + nn + 1] * w101 + l[base + nn + n] * w110 + l[base + nn + n + 1] * w111) shr 24).toInt()
+                    val level = ((v + t) shr 8).coerceIn(0, 255)
+                    packed = packed or (level shl (16 - 8 * c))
+                }
+                pixels[i] = packed
             }
         }
+
+    }
+
+    private var printLutKey: String? = null
+    private var printLut: Array<IntArray>? = null
+
+    /**
+     * Compensation for a print, with dithering: the inverse model stretches the tones, so plain
+     * 8-bit output would skip levels and band on smooth gradients. The compensation is sampled on
+     * a finer grid, interpolated with eight fractional bits, and the fraction is resolved with a
+     * noise pattern, so neighbouring pixels alternate between the two nearest levels and the film
+     * averages them out.
+     */
+    fun compensateDithered(pixels: IntArray, width: Int) {
+        val key = stateKey()
+        var lut = printLut
+        if (lut == null || key != printLutKey) {
+            val n = Lut.PRINT_N
+            lut = Array(3) { IntArray(n * n * n) }
+            val ctx = CompensationContext()
+            val rgb = FloatArray(3)
+            var k = 0
+            for (r in 0 until n) for (g in 0 until n) for (b in 0 until n) {
+                rgb[0] = r * 255f / (n - 1); rgb[1] = g * 255f / (n - 1); rgb[2] = b * 255f / (n - 1)
+                compensateFractional(rgb, ctx)
+                for (c in 0 until 3) lut[c][k] = Math.round(rgb[c] * 256f).coerceIn(0, 255 * 256)
+                k++
+            }
+            printLut = lut
+            printLutKey = key
+        }
+        Lut.applyLutDithered(pixels, width, lut, Lut.PRINT_N)
     }
 
     /** A copy of [source] seen through the model. */
@@ -491,7 +695,26 @@ class FilmModel(
 
 /** Test charts to print once and compare with the screen. */
 object TestChart {
-    fun render(size: Int, type: FilmType): Bitmap = if (type.monochrome) renderMono(size) else render(size)
+    /** Side of the black squares printed in the four corners of the image area, as a fraction of the chart. */
+    const val FIDUCIAL = 0.03f
+
+    fun render(size: Int, type: FilmType, fiducials: Boolean = true): Bitmap =
+        (if (type.monochrome) renderMono(size) else render(size)).also { if (fiducials) drawFiducials(it) }
+
+    /**
+     * Four black squares in the corners: the darkest, outermost marks of the chart, so a photo of
+     * the print can be aligned automatically (see [ChartReader.detectCorners]).
+     */
+    private fun drawFiducials(bitmap: Bitmap) {
+        val size = bitmap.width.toFloat()
+        val f = size * FIDUCIAL
+        val canvas = Canvas(bitmap)
+        val paint = Paint().apply { color = Color.BLACK }
+        canvas.drawRect(0f, 0f, f, f, paint)
+        canvas.drawRect(size - f, 0f, size, f, paint)
+        canvas.drawRect(size - f, size - f, size, size, paint)
+        canvas.drawRect(0f, size - f, f, size, paint)
+    }
 
     /** Monochrome chart: coarse and fine grey scales, a few luminance patches, a continuous gradient. */
     fun renderMono(size: Int): Bitmap {

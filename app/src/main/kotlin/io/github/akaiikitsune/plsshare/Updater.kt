@@ -33,7 +33,7 @@ class Updater(private val activity: Activity, private val s: Strings, private va
         private const val PREF_LAST_CHECK = "lastUpdateCheck"
     }
 
-    data class Release(val name: String, val build: Int, val url: String, val fileName: String)
+    data class Release(val name: String, val build: Int, val url: String, val fileName: String, val notes: String)
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var receiver: BroadcastReceiver? = null
@@ -87,7 +87,7 @@ class Updater(private val activity: Activity, private val s: Strings, private va
                 val name = asset.optString("name")
                 val build = ASSET.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: continue
                 if (best == null || build > best.build) {
-                    best = Release(release.optString("name").ifEmpty { release.optString("tag_name") }, build, asset.optString("browser_download_url"), name)
+                    best = Release(release.optString("name").ifEmpty { release.optString("tag_name") }, build, asset.optString("browser_download_url"), name, release.optString("body"))
                 }
             }
         }
@@ -98,10 +98,18 @@ class Updater(private val activity: Activity, private val s: Strings, private va
     private fun offer(release: Release, onMessage: (String) -> Unit) {
         AlertDialog.Builder(activity)
             .setTitle(s.updateTitle)
-            .setMessage(s.updateBody.format(release.name, release.build, currentBuild))
+            .setMessage(s.updateBody.format(release.name, release.build, currentBuild) + changelog(release.notes))
             .setNegativeButton(s.updateLater, null)
             .setPositiveButton(s.updateInstall) { _, _ -> download(release, onMessage) }
             .show()
+    }
+
+    /** The release notes, trimmed to what fits a dialog, after a blank line; nothing if there are none. */
+    private fun changelog(notes: String): String {
+        val text = notes.replace("\r", "").trim()
+        if (text.isEmpty()) return ""
+        val short = if (text.length > 1500) text.take(1500).substringBeforeLast('\n') + "\n…" else text
+        return "\n\n" + short
     }
 
     private fun download(release: Release, onMessage: (String) -> Unit) {
