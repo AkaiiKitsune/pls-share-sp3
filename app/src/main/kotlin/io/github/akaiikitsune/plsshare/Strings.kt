@@ -60,6 +60,8 @@ class Strings private constructor(private val fr: Boolean) {
     // Editor
     val editorTitle get() = t("Cadrage et couleurs", "Framing and colours")
     val cancel get() = t("Annuler", "Cancel")
+    val undo get() = t("Annuler la dernière modification", "Undo")
+    val redo get() = t("Rétablir", "Redo")
     val ok get() = "OK"
     val rotate get() = t("Tourner", "Rotate")
     val fill get() = t("Remplir", "Fill")

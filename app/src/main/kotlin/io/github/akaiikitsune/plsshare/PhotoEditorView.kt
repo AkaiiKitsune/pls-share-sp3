@@ -103,7 +103,14 @@ class PhotoEditorView(context: Context) : View(context) {
     /** A slider is being dragged: render fast until [endInteraction]. */
     private var interactive = false
 
+    /**
+     * Called right before the state is about to change by a user action (a gesture starts, a
+     * slider is grabbed, a button is tapped), so the caller can keep a snapshot for undo.
+     */
+    var onBeforeChange: (() -> Unit)? = null
+
     fun beginInteraction() {
+        onBeforeChange?.invoke()
         interactive = true
     }
 
@@ -329,14 +336,22 @@ class PhotoEditorView(context: Context) : View(context) {
         onChanged?.invoke()
     }
 
+    /** Like [overlaysChanged], for a discrete user action (button): records an undo step first. */
+    fun overlaysEdit(block: () -> Unit) {
+        onBeforeChange?.invoke()
+        block()
+        overlaysChanged()
+    }
+
     /** Force a full re-render (for example to feed the histogram after it was switched on). */
     fun invalidateFrame() {
         frameDirty = true
         invalidate()
     }
 
-    /** Apply a change made from outside (buttons, sliders). */
+    /** Apply a change made from outside (buttons, sliders). A discrete change outside a drag records an undo step. */
     fun update(block: EditState.() -> Unit) {
+        if (!interactive && !touching) onBeforeChange?.invoke()
         state.block()
         bitmap?.let { PrintRenderer.clamp(it, state) }
         changed()
@@ -360,6 +375,7 @@ class PhotoEditorView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN -> {
                 // Keep the scrolling page from stealing vertical drags while a finger is on the photo.
                 parent?.requestDisallowInterceptTouchEvent(true)
+                onBeforeChange?.invoke()
                 touching = true
                 invalidate()
             }
@@ -405,6 +421,7 @@ class PhotoEditorView(context: Context) : View(context) {
                 if (hit != null) {
                     selectedOverlay = hit
                     onOverlaySelected?.invoke(hit)
+                    onBeforeChange?.invoke()
                 }
                 dragging = hit
                 lastX = event.x; lastY = event.y

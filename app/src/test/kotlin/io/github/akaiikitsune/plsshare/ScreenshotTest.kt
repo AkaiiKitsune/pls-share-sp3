@@ -47,6 +47,9 @@ class ScreenshotTest {
     }
 
     private fun samplePhoto(): Bitmap {
+        javaClass.getResourceAsStream("/sample.jpg")?.use { input ->
+            android.graphics.BitmapFactory.decodeStream(input)?.let { return Photos.scaledForEditing(it, 1400) }
+        }
         val b = Bitmap.createBitmap(1200, 900, Bitmap.Config.ARGB_8888)
         val c = Canvas(b)
         val p = android.graphics.Paint()

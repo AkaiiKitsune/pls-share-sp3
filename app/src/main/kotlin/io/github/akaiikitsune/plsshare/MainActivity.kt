@@ -75,6 +75,9 @@ class MainActivity : Activity() {
         private const val MENU_COMPENSATE = 9
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
+        private const val UNDO_DEPTH = 40
+        /** Changes closer than this are merged into one undo step (slider nudges, typing). */
+        private const val UNDO_MERGE_MS = 700L
 
         /** The SP-3 needs 60 to 90 s after a Wi-Fi association before it accepts connections. */
         private const val REACH_TIMEOUT_MS = 120_000L
@@ -180,6 +183,13 @@ class MainActivity : Activity() {
     private var labelColor = 0
 
     private var photo: Bitmap? = null
+
+    // Undo / redo in the editor: snapshots of the edit state before each user action.
+    private val undoStack = ArrayDeque<EditState>()
+    private val redoStack = ArrayDeque<EditState>()
+    private var lastSnapshotAt = 0L
+    private lateinit var undoButton: Button
+    private lateinit var redoButton: Button
 
     /** A smaller copy of [photo] for the editor: enough for the screen, much faster to draw. */
     private var editorPhoto: Bitmap? = null
@@ -957,7 +967,15 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(ui.dp(16), ui.dp(10), ui.dp(16), ui.dp(8))
             addView(ui.softButton(s.cancel) { show(homeView) }, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
-            addView(ui.text(s.editorTitle, 17f, bold = true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            undoButton = ui.softButton("↶") { undo() }.apply { tooltipText = s.undo; setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f) }
+            redoButton = ui.softButton("↷") { redo() }.apply { tooltipText = s.redo; setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f) }
+            val middle = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                addView(undoButton, LinearLayout.LayoutParams(ui.dp(56), ui.dp(44)))
+                addView(redoButton, LinearLayout.LayoutParams(ui.dp(56), ui.dp(44)).apply { marginStart = ui.dp(8) })
+            }
+            addView(middle, LinearLayout.LayoutParams(0, ui.wrap, 1f))
             addView(ui.primaryButton(s.ok) { applyEdits() }.apply { minimumHeight = ui.dp(44); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f) }, LinearLayout.LayoutParams(ui.dp(80), ui.wrap))
         }
         screen.addView(header, LinearLayout.LayoutParams(ui.match, ui.wrap))
@@ -967,6 +985,7 @@ class MainActivity : Activity() {
         val metrics = resources.displayMetrics
         val photoSide = minOf(metrics.widthPixels, (metrics.heightPixels * 0.40f).toInt())
         editorView = PhotoEditorView(this)
+        editorView.onBeforeChange = { recordUndo() }
         histogramView = HistogramView(this).apply {
             visibility = View.GONE
             background = ui.rounded(0x66000000, 8)
@@ -1160,8 +1179,7 @@ class MainActivity : Activity() {
                 override fun afterTextChanged(text: android.text.Editable?) {
                     val o = editorView.selectedOverlay ?: return
                     if (o.kind == Overlay.Kind.TEXT && o.text != text.toString()) {
-                        o.text = text.toString()
-                        editorView.overlaysChanged()
+                        editorView.overlaysEdit { o.text = text.toString() }
                         refreshOverlayList()
                     }
                 }
@@ -1183,9 +1201,10 @@ class MainActivity : Activity() {
                     overlaySizeValue.text = "${Math.round((progress + 15) / 1000f * PREVIEW_SIZE)} px"
                     if (!fromUser) return
                     val o = editorView.selectedOverlay ?: return
-                    o.size = (progress + 15) / 1000f
-                    o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
-                    editorView.overlaysChanged()
+                    editorView.overlaysEdit {
+                        o.size = (progress + 15) / 1000f
+                        o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
+                    }
                 }
 
                 override fun onStartTrackingTouch(seekBar: SeekBar) {}
@@ -1197,7 +1216,7 @@ class MainActivity : Activity() {
             text = s.overlayDark
             setOnCheckedChangeListener { _, checked ->
                 val o = editorView.selectedOverlay ?: return@setOnCheckedChangeListener
-                if (o.dark != checked) { o.dark = checked; editorView.overlaysChanged() }
+                if (o.dark != checked) editorView.overlaysEdit { o.dark = checked }
             }
         }
         overlayEditor.addView(overlayDarkSwitch)
@@ -1237,8 +1256,10 @@ class MainActivity : Activity() {
                     overlayMarginValue.text = "$progress %"
                     if (!fromUser) return
                     val o = editorView.selectedOverlay ?: return
-                    o.margin = progress / 100f
-                    o.anchor?.let { setOverlayAnchor(it) }
+                    editorView.overlaysEdit {
+                        o.margin = progress / 100f
+                        o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
+                    }
                 }
 
                 override fun onStartTrackingTouch(seekBar: SeekBar) {}
@@ -1264,9 +1285,10 @@ class MainActivity : Activity() {
     private fun addOverlay(overlay: Overlay) {
         // Stack new texts upwards so they do not land on top of each other.
         overlay.y = (0.92f - 0.07f * editorView.state.overlays.size).coerceAtLeast(0.1f)
-        editorView.state.overlays += overlay
-        editorView.selectedOverlay = overlay
-        editorView.overlaysChanged()
+        editorView.overlaysEdit {
+            editorView.state.overlays += overlay
+            editorView.selectedOverlay = overlay
+        }
         refreshOverlayPanel()
     }
 
@@ -1283,9 +1305,10 @@ class MainActivity : Activity() {
             .setNegativeButton(s.cancel, null)
             .setPositiveButton(s.ok) { _, _ ->
                 val px = field.text.toString().trim().toIntOrNull()?.coerceIn(12, 200) ?: return@setPositiveButton
-                o.size = px / PREVIEW_SIZE.toFloat()
-                o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
-                editorView.overlaysChanged()
+                editorView.overlaysEdit {
+                    o.size = px / PREVIEW_SIZE.toFloat()
+                    o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
+                }
                 refreshOverlayPanel()
             }
             .show()
@@ -1293,9 +1316,10 @@ class MainActivity : Activity() {
 
     private fun setOverlayFont(font: Overlay.Font) {
         val o = editorView.selectedOverlay ?: return
-        o.font = font
-        o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
-        editorView.overlaysChanged()
+        editorView.overlaysEdit {
+            o.font = font
+            o.anchor?.let { o.place(it, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
+        }
         syncFontButtons()
     }
 
@@ -1306,20 +1330,19 @@ class MainActivity : Activity() {
 
     private fun setOverlayAnchor(anchor: Overlay.Anchor) {
         val o = editorView.selectedOverlay ?: return
-        o.place(anchor, PrintRenderer.overlayWidth(o, editorView.state.photoDate))
-        editorView.overlaysChanged()
+        editorView.overlaysEdit { o.place(anchor, PrintRenderer.overlayWidth(o, editorView.state.photoDate)) }
     }
 
     private fun setOverlayStyle(style: Overlay.Style) {
-        editorView.selectedOverlay?.style = style
-        editorView.overlaysChanged()
+        editorView.overlaysEdit { editorView.selectedOverlay?.style = style }
     }
 
     private fun removeSelectedOverlay() {
         val o = editorView.selectedOverlay ?: return
-        editorView.state.overlays.remove(o)
-        editorView.selectedOverlay = editorView.state.overlays.lastOrNull()
-        editorView.overlaysChanged()
+        editorView.overlaysEdit {
+            editorView.state.overlays.remove(o)
+            editorView.selectedOverlay = editorView.state.overlays.lastOrNull()
+        }
         refreshOverlayPanel()
     }
 
@@ -1506,6 +1529,7 @@ class MainActivity : Activity() {
         editorView.state.copyFrom(editState)
         editorView.state.photoDate = photoDate
         editorView.selectedOverlay = null
+        undoStack.clear(); redoStack.clear(); syncUndoButtons()
         buildThumbnails(bitmap)
         syncSliders()
         syncPresets()
@@ -1515,6 +1539,45 @@ class MainActivity : Activity() {
         filmButton.setTextColor(if (editorView.filmPreview) ui.accent else labelColor)
         showTab(adjust = true)
         show(editorScreen)
+    }
+
+    private fun recordUndo() {
+        val now = System.currentTimeMillis()
+        if (now - lastSnapshotAt < UNDO_MERGE_MS && undoStack.isNotEmpty()) return
+        lastSnapshotAt = now
+        undoStack.addLast(EditState().apply { copyFrom(editorView.state) })
+        while (undoStack.size > UNDO_DEPTH) undoStack.removeFirst()
+        redoStack.clear()
+        syncUndoButtons()
+    }
+
+    private fun undo() {
+        val previous = undoStack.pollLast() ?: return
+        redoStack.addLast(EditState().apply { copyFrom(editorView.state) })
+        restoreEditorState(previous)
+    }
+
+    private fun redo() {
+        val next = redoStack.pollLast() ?: return
+        undoStack.addLast(EditState().apply { copyFrom(editorView.state) })
+        restoreEditorState(next)
+    }
+
+    private fun restoreEditorState(state: EditState) {
+        lastSnapshotAt = 0L
+        editorView.state.copyFrom(state)
+        editorView.state.photoDate = photoDate
+        editorView.selectedOverlay = editorView.state.overlays.lastOrNull()
+        editorView.bitmap?.let { PrintRenderer.clamp(it, editorView.state) }
+        editorView.invalidateFrame()
+        syncSliders(); syncPresets(); syncFrameColors()
+        if (editorView.overlayMode) refreshOverlayPanel()
+        syncUndoButtons()
+    }
+
+    private fun syncUndoButtons() {
+        ui.setEnabledLook(undoButton, undoStack.isNotEmpty())
+        ui.setEnabledLook(redoButton, redoStack.isNotEmpty())
     }
 
     private fun applyEdits() {
