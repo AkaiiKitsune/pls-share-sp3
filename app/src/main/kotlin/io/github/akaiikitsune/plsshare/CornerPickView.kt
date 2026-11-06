@@ -84,7 +84,7 @@ class CornerPickView(context: Context) : View(context) {
                 }
             }
             MotionEvent.ACTION_MOVE -> if (dragging >= 0) { corners[dragging] = toPhoto(event.x, event.y); onChanged?.invoke() }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { parent?.requestDisallowInterceptTouchEvent(false); dragging = -1 }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { parent?.requestDisallowInterceptTouchEvent(false); dragging = -1; loupeSlot = -1 }
         }
         invalidate()
         return true
@@ -110,15 +110,23 @@ class CornerPickView(context: Context) : View(context) {
         if (dragging >= 0) drawLoupe(canvas, toView(corners[dragging]))
     }
 
+    /** Which corner of the view holds the loupe during a drag (0 TL, 1 TR, 2 BL, 3 BR), −1 between drags. */
+    private var loupeSlot = -1
+
     /**
-     * A magnified view of what is under the finger, drawn in a corner of the view away from it:
-     * the top corner on the opposite side, or the bottom one when the finger is near the top.
+     * A magnified view of what is under the finger, drawn in a corner of the view. It stays where
+     * it is for the whole drag, and only moves to the corner farthest from the finger when the
+     * finger comes close to it, so it does not jump around while the user adjusts a marker.
      */
     private fun drawLoupe(canvas: Canvas, at: FloatArray) {
         val r = 56f * density
         val pad = 8f * density
-        val cx = if (at[0] < width / 2f) width - r - pad else r + pad
-        val cy = if (at[1] < 2 * r + 2 * pad) height - r - pad else r + pad
+        val xs = floatArrayOf(r + pad, width - r - pad)
+        val ys = floatArrayOf(r + pad, height - r - pad)
+        fun dist(slot: Int): Float = Math.hypot((xs[slot % 2] - at[0]).toDouble(), (ys[slot / 2] - at[1]).toDouble()).toFloat()
+        if (loupeSlot < 0 || dist(loupeSlot) < r + 40f * density) loupeSlot = (0..3).maxByOrNull { dist(it) }!!
+        val cx = xs[loupeSlot % 2]
+        val cy = ys[loupeSlot / 2]
         loupePath.reset()
         loupePath.addCircle(cx, cy, r, Path.Direction.CW)
         canvas.drawCircle(cx + 2f * density, cy + 3f * density, r + 2f * density, loupeShadow)
