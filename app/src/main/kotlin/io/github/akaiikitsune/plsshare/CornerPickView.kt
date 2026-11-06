@@ -18,12 +18,25 @@ class CornerPickView(context: Context) : View(context) {
     var bitmap: Bitmap? = null
         set(value) { field = value; corners.clear(); invalidate() }
 
-    /** Corners in photo pixels, in the order tapped. */
+    /** Marked points in photo pixels, in the order tapped (image corners, or the anchor patches' centres). */
     val corners = ArrayList<FloatArray>()
     var onChanged: (() -> Unit)? = null
+    /** Called with the index of a marker the finger just released (after a tap or a drag). */
+    var onReleased: ((Int) -> Unit)? = null
+    /** Labels of the four markers, in tapping order. */
+    var labels = listOf("1", "2", "3", "4")
+    /** An outline to draw besides the markers (the image area derived from the anchors), as (x0, y0, …) in photo pixels. */
+    var outline: FloatArray? = null
+        set(value) { field = value; invalidate() }
+    /** Whether the markers themselves are joined into a quad (true when they are the image's corners). */
+    var joinMarkers = true
 
     private val photoPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.5f * context.resources.displayMetrics.density; color = Ui.accent(context) }
+    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 1.5f * context.resources.displayMetrics.density; color = Ui.accent(context)
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f * context.resources.displayMetrics.density, 6f * context.resources.displayMetrics.density), 0f)
+    }
     private val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.accent(context) }
     private val markerRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = Color.WHITE }
     private val density = context.resources.displayMetrics.density
@@ -69,22 +82,36 @@ class CornerPickView(context: Context) : View(context) {
         setMeasuredDimension(w, h)
     }
 
+    private var downX = 0f
+    private var downY = 0f
+
+    /**
+     * A finger on a marker drags it (and the page must not scroll); elsewhere, the page scrolls
+     * as usual, and a plain tap (no movement) adds the next marker there.
+     */
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (bitmap == null) return false
         fit()
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                parent?.requestDisallowInterceptTouchEvent(true)
+                downX = event.x; downY = event.y
                 dragging = corners.indices.minByOrNull { i -> val v = toView(corners[i]); (v[0] - event.x) * (v[0] - event.x) + (v[1] - event.y) * (v[1] - event.y) }
                     ?.takeIf { i -> val v = toView(corners[i]); Math.hypot((v[0] - event.x).toDouble(), (v[1] - event.y).toDouble()) < 28 * density } ?: -1
-                if (dragging < 0 && corners.size < 4) {
-                    corners += toPhoto(event.x, event.y)
-                    dragging = corners.size - 1
-                    onChanged?.invoke()
-                }
+                if (dragging >= 0) parent?.requestDisallowInterceptTouchEvent(true)
             }
             MotionEvent.ACTION_MOVE -> if (dragging >= 0) { corners[dragging] = toPhoto(event.x, event.y); onChanged?.invoke() }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { parent?.requestDisallowInterceptTouchEvent(false); dragging = -1; loupeSlot = -1 }
+            MotionEvent.ACTION_UP -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                var released = dragging
+                if (released < 0 && corners.size < 4 && Math.hypot((event.x - downX).toDouble(), (event.y - downY).toDouble()) < 12 * density) {
+                    corners += toPhoto(event.x, event.y)
+                    released = corners.size - 1
+                    onChanged?.invoke()
+                }
+                dragging = -1; loupeSlot = -1
+                if (released >= 0) onReleased?.invoke(released)
+            }
+            MotionEvent.ACTION_CANCEL -> { parent?.requestDisallowInterceptTouchEvent(false); dragging = -1; loupeSlot = -1 }
         }
         invalidate()
         return true
@@ -94,13 +121,18 @@ class CornerPickView(context: Context) : View(context) {
         val b = bitmap ?: return
         fit()
         canvas.drawBitmap(b, null, dest, photoPaint)
-        if (corners.size >= 2) {
+        if (joinMarkers && corners.size >= 2) {
             val path = Path()
             corners.forEachIndexed { i, c -> val v = toView(c); if (i == 0) path.moveTo(v[0], v[1]) else path.lineTo(v[0], v[1]) }
             if (corners.size == 4) path.close()
             canvas.drawPath(path, linePaint)
         }
-        val labels = listOf("1", "2", "3", "4")
+        outline?.let { o ->
+            val path = Path()
+            for (k in 0 until 4) { val v = toView(floatArrayOf(o[2 * k], o[2 * k + 1])); if (k == 0) path.moveTo(v[0], v[1]) else path.lineTo(v[0], v[1]) }
+            path.close()
+            canvas.drawPath(path, outlinePaint)
+        }
         corners.forEachIndexed { i, c ->
             val v = toView(c)
             canvas.drawCircle(v[0], v[1], radius, markerPaint)
@@ -136,8 +168,14 @@ class CornerPickView(context: Context) : View(context) {
         canvas.scale(loupeZoom, loupeZoom)
         canvas.translate(-at[0], -at[1])
         canvas.drawBitmap(bitmap!!, null, dest, photoPaint)
+        outline?.let { o ->
+            val path = Path()
+            for (k in 0 until 4) { val v = toView(floatArrayOf(o[2 * k], o[2 * k + 1])); if (k == 0) path.moveTo(v[0], v[1]) else path.lineTo(v[0], v[1]) }
+            path.close()
+            canvas.drawPath(path, Paint(outlinePaint).apply { strokeWidth = outlinePaint.strokeWidth / loupeZoom })
+        }
         // The quad's edges, so the user sees where the line will run.
-        if (corners.size >= 2) {
+        if (joinMarkers && corners.size >= 2) {
             val path = Path()
             corners.forEachIndexed { i, c -> val v = toView(c); if (i == 0) path.moveTo(v[0], v[1]) else path.lineTo(v[0], v[1]) }
             if (corners.size == 4) path.close()

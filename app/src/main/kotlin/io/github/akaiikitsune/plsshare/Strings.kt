@@ -215,10 +215,16 @@ class Strings private constructor(private val fr: Boolean) {
         "Print the chart, photograph the print flat with the white frame fully visible, then mark the four corners of the image area. The app reads the greys and colours, relates them to the frame's white (which cancels the light, daylight or flash) and derives the film settings.",
     )
     val measurePick get() = t("Choisir des photos", "Choose photos")
-    val measureStripHint get() = t("Touchez une photo pour vérifier ou corriger ses coins ; les photos grisées n'ont pas de coins. Appui long pour la retirer. « Mesurer » moyenne toutes les photos qui ont leurs coins.", "Tap a photo to check or fix its corners; dimmed photos have none. Long-press to drop it. “Measure” averages every photo that has its corners.")
+    val measureStripHint get() = t("Touchez une photo pour vérifier ou corriger ses repères ; les photos grisées n'en ont pas. Appui long pour la retirer. « Mesurer » moyenne toutes les photos qui ont leurs repères.", "Tap a photo to check or fix its markers; dimmed photos have none. Long-press to drop it. “Measure” averages every photo that has its markers.")
     val measureLoaded get() = t("%d photos chargées, coins trouvés sur %d.", "%d photos loaded, corners found on %d.")
     val measureShoot get() = t("Photographier", "Take a photo")
-    val measureHint get() = t("Les coins sont placés automatiquement d'après la grille de couleurs : vérifiez-les à la loupe en faisant glisser un repère. Sinon, touchez les quatre coins de la zone image (pas du cadre), dans l'ordre : haut gauche, haut droit, bas droit, bas gauche. Lumière du jour, sans reflet, le cadre blanc entièrement visible.", "The corners are placed automatically from the colour grid: check them with the loupe by dragging a marker. Otherwise tap the four corners of the image area (not the frame), in order: top left, top right, bottom right, bottom left. Daylight, no glare, the white frame fully visible.")
+    val measureHint get() = t(
+        "Les repères sont posés automatiquement d'après la grille de couleurs : ils marquent le centre des quatre patches de coin (1 rouge en haut à gauche, 2 cyan en haut à droite, 3 gris en bas à droite, 4 bleu ciel en bas à gauche), et le cadre pointillé en découle. Pour corriger, faites glisser un repère : relâché sur un patch, il s'aimante à son centre. Le cadre peut dépasser légèrement l'image visible, c'est normal : l'imprimante rogne et étire l'image de quelques pour cent. Lumière du jour, sans reflet.",
+        "The markers are placed automatically from the colour grid: they mark the centres of the four corner patches (1 red top left, 2 cyan top right, 3 grey bottom right, 4 sky blue bottom left) and the dashed outline follows. To correct one, drag it: released on a patch, it snaps to its centre. The outline may slightly exceed the visible image, which is normal: the printer crops and stretches the image by a few percent. Daylight, no glare.",
+    )
+    val measureMarks get() = t("Repères de la photo", "Photo markers")
+    val measureMarksOf get() = t("Repères de la photo %d / %d", "Markers of photo %d / %d")
+    val measureWarpedAll get() = t("Mires redressées des %d photos, moyennées.", "Rectified charts of the %d photos, averaged.")
     val measureReset get() = t("Recommencer", "Start over")
     val measureRun get() = t("Mesurer", "Measure")
     val measureResult get() = t("Résultat : %s. En haut les gris mesurés sur le tirage, en bas ceux que simule le nouveau modèle.", "Result: %s. Top: the greys measured on the print; bottom: the greys the new model simulates.")
@@ -235,7 +241,7 @@ class Strings private constructor(private val fr: Boolean) {
     val measureApply get() = t("Appliquer ces valeurs", "Apply these values")
     val measureApplied get() = t("Calibration mesurée appliquée.", "Measured calibration applied.")
     val measureFailed get() = t("Mesure impossible : %s", "Could not measure: %s")
-    val measureWarped get() = t("Mire redressée : les paliers et les patches doivent tomber bien dans leurs cases, sinon ajustez les coins.", "Rectified chart: the steps and patches must sit squarely in their cells; otherwise adjust the corners.")
+    val measureWarped get() = t("Mire redressée de cette photo : les paliers et les patches doivent tomber bien dans leurs cases, sinon ajustez les repères.", "This photo's rectified chart: the steps and patches must sit squarely in their cells; otherwise adjust the markers.")
     val measureCornersFound get() = t("Coins détectés, vérifiez-les.", "Corners detected, check them.")
     val measurePhotos get() = t("Moyenne de %d photos.", "Average of %d photos.")
     val shareShortcut get() = t("Imprimer sur SP-3", "Print on SP-3")

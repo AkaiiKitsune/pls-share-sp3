@@ -135,13 +135,25 @@ class MainActivity : Activity() {
     private lateinit var measureColourCompare: ImageView
     private lateinit var hueReadout: TextView
     private var measuredFilm: FilmModel? = null
-    /** One photo of the printed chart in the measurement screen: its corners, and its reading once measured with them. */
+    /**
+     * One photo of the printed chart in the measurement screen. On colour film the user marks the
+     * centres of the four corner patches ([anchors]) and the image corners follow; on monochrome
+     * film the corners are marked directly. [reading] is kept with the corners it was read with.
+     */
     private class ChartPhoto(val bitmap: Bitmap, var corners: FloatArray?) {
+        var anchors: FloatArray? = corners?.let { ChartReader.anchorsFromCorners(it) }
         var reading: ChartReader.Reading? = null
         var readingCorners: FloatArray? = null
         val complete get() = corners != null
         var thumb: ImageView? = null
+        /** Uniform patches of the photo, for the magnet; computed on first use. */
+        var candidates: List<FloatArray>? = null
     }
+    private lateinit var markPanel: View
+    private lateinit var markPanelButton: Button
+    private lateinit var rectifiedBox: View
+    private lateinit var rectifiedLabel: TextView
+    private var rectifiedGeneration = 0
 
     /** Every chart photo loaded so far; all those with corners are measured and averaged. */
     private val chartPhotos = ArrayList<ChartPhoto>()
@@ -150,7 +162,6 @@ class MainActivity : Activity() {
     private lateinit var chartStripScroll: HorizontalScrollView
     private lateinit var chartStripHint: TextView
     private lateinit var measureWarped: ImageView
-    private lateinit var measureWarpedLabel: TextView
     private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
     private lateinit var film: FilmModel
@@ -1035,36 +1046,49 @@ class MainActivity : Activity() {
         chartStripHint = ui.text(s.measureStripHint, 12f, alpha = 0.6f).apply { visibility = View.GONE }
         root.addView(chartStripHint, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
         ui.space(root, 10)
-        cornerPick = CornerPickView(this).apply {
-            background = ui.rounded(Ui.CARD, 12)
-            clipToOutline = true
-            onChanged = { onChartCornersChanged() }
-        }
-        root.addView(cornerPick, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        // The marking panel folds away once the marks are right; the strip reopens it.
+        markPanelButton = ui.softButton("") { setMarkPanel(markPanel.visibility != View.VISIBLE) }
+        root.addView(markPanelButton, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 8)
-        root.addView(ui.text(s.measureHint, 12f, alpha = 0.6f))
-        ui.space(root, 12)
+        markPanel = ui.column().apply {
+            cornerPick = CornerPickView(this@MainActivity).apply {
+                background = ui.rounded(Ui.CARD, 12)
+                clipToOutline = true
+                onChanged = { onChartCornersChanged() }
+                onReleased = { index -> onChartMarkReleased(index) }
+            }
+            addView(cornerPick, LinearLayout.LayoutParams(ui.match, ui.wrap))
+            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(8)))
+            addView(ui.text(s.measureHint, 12f, alpha = 0.6f))
+            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(12)))
+        }
+        root.addView(markPanel, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        // The rectified chart: the selected photo's while marking, all photos averaged once folded.
+        rectifiedBox = ui.column().apply {
+            rectifiedLabel = ui.text(s.measureWarped, 13f, alpha = 0.7f)
+            addView(rectifiedLabel)
+            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(6)))
+            measureWarped = object : ImageView(this@MainActivity) {
+                override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                    val w = MeasureSpec.getSize(widthMeasureSpec) * 3 / 5
+                    setMeasuredDimension(w, w)
+                }
+            }.apply {
+                scaleType = ImageView.ScaleType.FIT_XY
+                background = ui.rounded(Ui.CARD, 12)
+                clipToOutline = true
+            }
+            addView(measureWarped, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { gravity = Gravity.CENTER_HORIZONTAL })
+            addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(12)))
+            visibility = View.GONE
+        }
+        root.addView(rectifiedBox, LinearLayout.LayoutParams(ui.match, ui.wrap))
         measureResetButton = ui.softButton(s.measureReset) { resetChartPhotos() }
         measureRunButton = ui.primaryButton(s.measureRun) { runMeasure() }
         root.addView(ui.row(measureResetButton, measureRunButton), LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 16)
 
         measureResultBox = ui.column().apply { visibility = View.GONE }
-        measureWarpedLabel = ui.text(s.measureWarped, 13f, alpha = 0.7f)
-        measureResultBox.addView(measureWarpedLabel)
-        ui.space(measureResultBox, 6)
-        measureWarped = object : ImageView(this) {
-            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val w = MeasureSpec.getSize(widthMeasureSpec) / 2
-                setMeasuredDimension(w, w)
-            }
-        }.apply {
-            scaleType = ImageView.ScaleType.FIT_XY
-            background = ui.rounded(Ui.CARD, 12)
-            clipToOutline = true
-        }
-        measureResultBox.addView(measureWarped, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { gravity = Gravity.CENTER_HORIZONTAL })
-        ui.space(measureResultBox, 12)
         measureReport = ui.text("", 13f, alpha = 0.7f)
         measureResultBox.addView(measureReport)
         ui.space(measureResultBox, 8)
@@ -1108,6 +1132,7 @@ class MainActivity : Activity() {
 
     private fun openMeasure() {
         hideMeasureResult()
+        cornerPick.joinMarkers = filmType.monochrome
         show(measureView)
     }
 
@@ -1117,6 +1142,16 @@ class MainActivity : Activity() {
         ui.setEnabledLook(measureRunButton, chartPhotos.any { it.complete })
         chartStripScroll.visibility = if (any) View.VISIBLE else View.GONE
         chartStripHint.visibility = if (any) View.VISIBLE else View.GONE
+        markPanelButton.visibility = if (any) View.VISIBLE else View.GONE
+        if (!any) { markPanel.visibility = View.GONE; rectifiedBox.visibility = View.GONE }
+        val open = markPanel.visibility == View.VISIBLE
+        markPanelButton.text = (if (open) "▾ " else "▸ ") + (if (chartCurrent >= 0) s.measureMarksOf.format(chartCurrent + 1, chartPhotos.size) else s.measureMarks)
+    }
+
+    private fun setMarkPanel(open: Boolean) {
+        markPanel.visibility = if (open) View.VISIBLE else View.GONE
+        syncMeasureButtons()
+        updateRectified()
     }
 
     private fun hideMeasureResult() {
@@ -1129,27 +1164,92 @@ class MainActivity : Activity() {
         chartCurrent = -1
         chartStrip.removeAllViews()
         cornerPick.bitmap = null
+        cornerPick.outline = null
         hideMeasureResult()
         syncMeasureButtons()
     }
 
-    /** The picker's corners moved: keep them on the current photo, and its reading is stale. */
+    /** The markers moved: keep them on the current photo, derive the corners, and its reading is stale. */
     private fun onChartCornersChanged() {
         val entry = chartPhotos.getOrNull(chartCurrent) ?: return
-        entry.corners = cornerPick.cornersArray()
+        val marks = cornerPick.cornersArray()
+        if (filmType.monochrome) {
+            entry.corners = marks
+            entry.anchors = marks?.let { ChartReader.anchorsFromCorners(it) }
+        } else {
+            entry.anchors = marks
+            entry.corners = marks?.let { runCatching { ChartReader.cornersFromAnchors(it) }.getOrNull() }
+        }
+        cornerPick.outline = if (filmType.monochrome) null else entry.corners
         if (entry.readingCorners?.contentEquals(entry.corners ?: FloatArray(0)) != true) { entry.reading = null; hideMeasureResult() }
         refreshChartThumb(entry)
         syncMeasureButtons()
     }
 
+    /** A marker was released: on colour film it snaps to the centre of the patch under it; then the rectified chart follows. */
+    private fun onChartMarkReleased(index: Int) {
+        val entry = chartPhotos.getOrNull(chartCurrent) ?: return
+        if (filmType.monochrome) { updateRectified(); return }
+        val mark = cornerPick.corners.getOrNull(index) ?: return
+        val x = mark[0]; val y = mark[1]
+        val generation = ++rectifiedGeneration
+        Thread {
+            val candidates = entry.candidates ?: runCatching { ChartReader.patchCandidates(entry.bitmap) }.getOrDefault(emptyList()).also { entry.candidates = it }
+            val snapped = ChartReader.snapToPatch(candidates, x, y, maxOf(entry.bitmap.width, entry.bitmap.height))
+            mainHandler.post {
+                if (generation != rectifiedGeneration || chartPhotos.getOrNull(chartCurrent) !== entry) return@post
+                if (snapped != null && cornerPick.corners.size > index) {
+                    cornerPick.corners[index] = snapped
+                    cornerPick.invalidate()
+                    onChartCornersChanged()
+                }
+                updateRectified()
+            }
+        }.start()
+    }
+
+    /**
+     * The rectified chart under the strip: the selected photo's while its marks are being edited,
+     * every measured photo averaged pixel by pixel once the panel is folded. Readings are computed
+     * in the background and kept with the corners they were read with.
+     */
+    private fun updateRectified() {
+        val open = markPanel.visibility == View.VISIBLE
+        val targets = if (open) listOfNotNull(chartPhotos.getOrNull(chartCurrent)?.takeIf { it.complete }) else chartPhotos.filter { it.complete }
+        if (targets.isEmpty()) { rectifiedBox.visibility = View.GONE; return }
+        rectifiedLabel.text = if (open) s.measureWarped else s.measureWarpedAll.format(targets.size)
+        val type = filmType
+        val generation = ++rectifiedGeneration
+        Thread {
+            val result = runCatching {
+                for (e in targets) {
+                    val c = e.corners!!
+                    if (e.reading == null || e.readingCorners?.contentEquals(c) != true) { e.reading = ChartReader.read(e.bitmap, c, type); e.readingCorners = c.clone() }
+                }
+                ChartReader.averageWarped(targets.map { it.reading!! })
+            }
+            mainHandler.post {
+                if (generation != rectifiedGeneration) return@post
+                result.onSuccess { measureWarped.setImageBitmap(it); rectifiedBox.visibility = View.VISIBLE }
+                    .onFailure { rectifiedBox.visibility = View.GONE }
+            }
+        }.start()
+    }
+
     private fun selectChartPhoto(index: Int) {
         val entry = chartPhotos.getOrNull(index) ?: return
         chartCurrent = index
+        cornerPick.joinMarkers = filmType.monochrome
         cornerPick.bitmap = entry.bitmap
-        entry.corners?.let { c -> for (k in 0 until 4) cornerPick.corners += floatArrayOf(c[2 * k], c[2 * k + 1]) }
+        val marks = if (filmType.monochrome) entry.corners else entry.anchors
+        marks?.let { c -> for (k in 0 until 4) cornerPick.corners += floatArrayOf(c[2 * k], c[2 * k + 1]) }
+        cornerPick.outline = if (filmType.monochrome) null else entry.corners
         cornerPick.invalidate()
         for (e in chartPhotos) refreshChartThumb(e)
         entry.thumb?.let { t -> chartStripScroll.post { chartStripScroll.smoothScrollTo(t.left - ui.dp(20), 0) } }
+        markPanel.visibility = View.VISIBLE
+        syncMeasureButtons()
+        updateRectified()
     }
 
     /** Selected: accent frame; without corners: dimmed, so the ones to fix stand out. */
@@ -1176,8 +1276,7 @@ class MainActivity : Activity() {
         chartStrip.addView(thumb, LinearLayout.LayoutParams(ui.dp(72), ui.dp(72)).apply { marginEnd = ui.dp(8) })
         refreshChartThumb(entry)
         hideMeasureResult()
-        if (select || chartCurrent < 0) selectChartPhoto(chartPhotos.size - 1)
-        syncMeasureButtons()
+        if (select || chartCurrent < 0) selectChartPhoto(chartPhotos.size - 1) else { syncMeasureButtons(); updateRectified() }
     }
 
     private fun removeChartPhoto(entry: ChartPhoto) {
@@ -1187,11 +1286,12 @@ class MainActivity : Activity() {
         chartStrip.removeView(entry.thumb)
         hideMeasureResult()
         when {
-            chartPhotos.isEmpty() -> { chartCurrent = -1; cornerPick.bitmap = null }
+            chartPhotos.isEmpty() -> { chartCurrent = -1; cornerPick.bitmap = null; cornerPick.outline = null }
             index == chartCurrent -> selectChartPhoto(minOf(index, chartPhotos.size - 1))
             index < chartCurrent -> chartCurrent--
         }
         syncMeasureButtons()
+        updateRectified()
     }
 
     /** Several photos at once: they are loaded and aligned in the background, and appear in the strip as they come. */
@@ -1265,7 +1365,6 @@ class MainActivity : Activity() {
     private fun runMeasure() {
         val entries = chartPhotos.filter { it.complete }
         if (entries.isEmpty()) return
-        val current = chartPhotos.getOrNull(chartCurrent)?.takeIf { it.complete } ?: entries[0]
         val type = filmType
         setBusy(true)
         Thread {
@@ -1275,14 +1374,16 @@ class MainActivity : Activity() {
                     if (e.reading == null || e.readingCorners?.contentEquals(c) != true) { e.reading = ChartReader.read(e.bitmap, c, type); e.readingCorners = c.clone() }
                 }
                 val reading = ChartReader.average(entries.map { it.reading!! })
-                Triple(current.reading!!, reading, ChartReader.fit(reading, type))
+                reading to ChartReader.fit(reading, type)
             }
             mainHandler.post {
                 setBusy(false)
-                result.onSuccess { (own, reading, fit) ->
+                result.onSuccess { (reading, fit) ->
                     val model = fit.model
                     measuredFilm = model
-                    measureWarped.setImageBitmap(own.warped)
+                    markPanel.visibility = View.GONE
+                    syncMeasureButtons()
+                    updateRectified()
                     val count = entries.size
                     measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms))
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))

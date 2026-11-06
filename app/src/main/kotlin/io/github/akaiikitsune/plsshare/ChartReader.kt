@@ -163,6 +163,22 @@ object ChartReader {
 
     private fun luma(c: FloatArray) = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]
 
+    /** The pixel-wise mean of the rectified charts of several readings: one picture of all the photos at once. */
+    fun averageWarped(readings: List<Reading>): Bitmap {
+        require(readings.isNotEmpty())
+        if (readings.size == 1) return readings[0].warped
+        val n = SIZE * SIZE
+        val sr = IntArray(n); val sg = IntArray(n); val sb = IntArray(n)
+        val px = IntArray(n)
+        for (r in readings) {
+            r.warped.getPixels(px, 0, SIZE, 0, 0, SIZE, SIZE)
+            for (i in 0 until n) { val c = px[i]; sr[i] += Color.red(c); sg[i] += Color.green(c); sb[i] += Color.blue(c) }
+        }
+        val k = readings.size
+        for (i in 0 until n) px[i] = Color.rgb(sr[i] / k, sg[i] / k, sb[i] / k)
+        return Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888).apply { setPixels(px, 0, SIZE, 0, 0, SIZE, SIZE) }
+    }
+
     /** The mean of several readings of the same chart (different photos, lights or angles). */
     fun average(readings: List<Reading>): Reading {
         require(readings.isNotEmpty())
@@ -416,6 +432,58 @@ object ChartReader {
             }
         }
         return DoubleArray(9) { if (it < 8) m[it][8] else 1.0 }
+    }
+
+    // ------------------------------------------------------------ Anchors: the four corner patches
+
+    /** Grid positions (column, row) of the four anchor patches: red, cyan, grey, sky blue. */
+    val anchorCells = listOf(0 to 0, 3 to 0, 3 to 3, 0 to 3)
+
+    /** The chart coordinates of the four anchor patches' centres, flat (x0, y0, …). */
+    fun anchorChartPoints(): DoubleArray = anchorCells.flatMap { (c, r) -> patchCentre(c, r).toList() }.toDoubleArray()
+
+    /**
+     * The image area's corners from the four anchor patch centres in the photo (red top-left, cyan
+     * top-right, grey bottom-right, sky blue bottom-left): the patches are easy to aim at and sit
+     * well inside the print, unlike the image's edges, which the printer partly hides and stretches.
+     */
+    fun cornersFromAnchors(anchors: FloatArray): FloatArray {
+        val h = homographyFrom(anchorChartPoints(), anchors)
+        val out = FloatArray(8)
+        for ((k, c) in listOf(0.0 to 0.0, 1.0 to 0.0, 1.0 to 1.0, 0.0 to 1.0).withIndex()) {
+            val p = map(h, c.first, c.second)
+            out[2 * k] = p[0].toFloat(); out[2 * k + 1] = p[1].toFloat()
+        }
+        return out
+    }
+
+    /** The anchor patch centres in the photo for given image corners (the inverse of [cornersFromAnchors]). */
+    fun anchorsFromCorners(corners: FloatArray): FloatArray {
+        val h = homography(corners)
+        val pts = anchorChartPoints()
+        val out = FloatArray(8)
+        for (k in 0 until 4) {
+            val p = map(h, pts[2 * k], pts[2 * k + 1])
+            out[2 * k] = p[0].toFloat(); out[2 * k + 1] = p[1].toFloat()
+        }
+        return out
+    }
+
+    /** The uniform blobs of a photo, in photo pixels (centre x, y, and the side of a square of the same area). */
+    fun patchCandidates(photo: Bitmap): List<FloatArray> {
+        val (blobs, scale) = findBlobs(photo)
+        return blobs.map { floatArrayOf(it.cx * scale, it.cy * scale, Math.sqrt(it.area.toDouble()).toFloat() * scale) }
+    }
+
+    /**
+     * Magnet for a released anchor: the centre of the uniform patch under or next to the finger,
+     * when there is one of a plausible size; otherwise null and the marker stays where it is.
+     */
+    fun snapToPatch(candidates: List<FloatArray>, x: Float, y: Float, photoSide: Int): FloatArray? {
+        val best = candidates.filter { it[2] > photoSide * 0.015f && it[2] < photoSide * 0.25f }
+            .minByOrNull { Math.hypot((it[0] - x).toDouble(), (it[1] - y).toDouble()) } ?: return null
+        val d = Math.hypot((best[0] - x).toDouble(), (best[1] - y).toDouble())
+        return if (d < best[2] * 0.9) floatArrayOf(best[0], best[1]) else null
     }
 
     // ------------------------------------------------------------ Detection from the corner marks

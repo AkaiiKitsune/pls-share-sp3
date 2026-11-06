@@ -55,3 +55,31 @@ class ChartGridDetectTest {
         for (i in 0 until 8) assertEquals("corner value $i", hand[i], found!![i], 80f)
     }
 }
+
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [31])
+class AnchorMagnetTest {
+    private fun load(name: String) = javaClass.getResourceAsStream("/$name.jpg")!!.use { BitmapFactory.decodeStream(it)!! }
+
+    @Test
+    fun `a marker released near a corner patch snaps to its centre, and the corners round-trip`() {
+        for (name in listOf("chart-wood", "chart-bamboo", "chart-fabric", "chart-stickers")) {
+            val photo = load(name)
+            val corners = ChartReader.detectCorners(photo, FilmType.COLOR)!!
+            val anchors = ChartReader.anchorsFromCorners(corners)
+            val back = ChartReader.cornersFromAnchors(anchors)
+            for (i in 0 until 8) assertEquals(corners[i], back[i], 0.5f)
+            val candidates = ChartReader.patchCandidates(photo)
+            val side = maxOf(photo.width, photo.height)
+            for (k in 0 until 4) for ((ox, oy) in listOf(12 to 7, -10 to 9, 8 to -11)) {
+                val snapped = ChartReader.snapToPatch(candidates, anchors[2 * k] + ox, anchors[2 * k + 1] + oy, side)
+                val before = Math.hypot(ox.toDouble(), oy.toDouble())
+                val after = snapped?.let { Math.hypot((it[0] - anchors[2 * k]).toDouble(), (it[1] - anchors[2 * k + 1]).toDouble()) }
+                println("$name anchor $k offset ($ox,$oy): %.1f px -> %s".format(before, after?.let { "%.1f px".format(it) } ?: "no patch"))
+                // The blob centre and the least-squares prediction differ by a few pixels; the snap must land on the blob.
+                assertTrue("$name anchor $k: snapped $after", after != null && after < 12.0)
+            }
+        }
+    }
+}
