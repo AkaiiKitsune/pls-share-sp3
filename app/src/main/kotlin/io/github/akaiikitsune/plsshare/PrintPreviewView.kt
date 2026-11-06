@@ -16,6 +16,14 @@ class PrintPreviewView(context: Context) : View(context) {
     var bitmap: Bitmap? = null
         set(value) { field = value; simulated = null; invalidate() }
 
+    /** Fractions of the image hidden under the printer's frame at the top and bottom, drawn as dark bands. */
+    var hiddenTop = 0f
+        set(value) { field = value; invalidate() }
+    var hiddenBottom = 0f
+        set(value) { field = value; invalidate() }
+    private val hiddenPaint = Paint().apply { color = 0x73000000 }
+    private val hiddenLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f; color = 0xB3FFFFFF.toInt() }
+
     var filmPreview = false
         set(value) { field = value; invalidate() }
 
@@ -77,5 +85,8 @@ class PrintPreviewView(context: Context) : View(context) {
         dest.set(il, it, il + side, it + side)
         val shown = if (filmPreview) simulated ?: simulate(b).also { simulated = it } else b
         canvas.drawBitmap(shown, null, dest, photo)
+        // What the frame will hide, when the printer's geometry was measured.
+        if (hiddenTop > 0f) canvas.drawRect(dest.left, dest.top, dest.right, dest.top + side * hiddenTop, hiddenPaint)
+        if (hiddenBottom > 0f) canvas.drawRect(dest.left, dest.bottom - side * hiddenBottom, dest.right, dest.bottom, hiddenPaint)
     }
 }

@@ -165,6 +165,10 @@ class MainActivity : Activity() {
     private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
     private lateinit var film: FilmModel
+    private lateinit var geometry: PrinterGeometry
+    private var measuredGeometry: FloatArray? = null
+    private lateinit var geometryReadout: TextView
+    private lateinit var geometryToggle: Button
     private var compensate = false
     private var filmType = FilmType.COLOR
     private var chartBase: Bitmap? = null
@@ -277,6 +281,7 @@ class MainActivity : Activity() {
         queueEnabled = prefs.getBoolean(PREF_QUEUE, false)
         filmType = FilmType.fromKey(prefs.getString(PREF_FILM_TYPE, null))
         film = FilmModel.load(prefs, filmType)
+        geometry = PrinterGeometry.load(prefs)
         PrintRenderer.monochrome = filmType.monochrome
         compensate = prefs.getBoolean(PREF_COMPENSATE, false)
 
@@ -376,7 +381,7 @@ class MainActivity : Activity() {
         val root = ui.column(20)
 
         lateinit var menuButton: Button
-        menuButton = ui.softButton("⋮") { showMenu(menuButton) }
+        menuButton = ui.softButton("⋮") { showMenu(menuButton) }.apply { contentDescription = s.menuDescription; tooltipText = s.menuDescription }
         val header = titleBar(s.title, menuButton)
 
         // Status card
@@ -407,7 +412,7 @@ class MainActivity : Activity() {
             filmPreview = prefs.getBoolean(PREF_FILM, false)
             onClick = { if (photo == null) pickPhoto() else openEditor() }
         }
-        previewHint = ui.text(s.tapToPick, 14f, alpha = 0.6f).apply { gravity = Gravity.CENTER }
+        previewHint = ui.text(s.tapToPick, 14f, alpha = 0.7f).apply { gravity = Gravity.CENTER }
         val previewFrame = FrameLayout(this).apply {
             addView(previewImage, FrameLayout.LayoutParams(ui.match, ui.wrap))
             addView(previewHint, FrameLayout.LayoutParams(ui.wrap, ui.wrap, Gravity.CENTER))
@@ -417,6 +422,7 @@ class MainActivity : Activity() {
         // look; tapping it offers the two films. Changed rarely, so it stays out of the way.
         filmChip = ui.softButton("") { showFilmMenu(filmChip) }.apply {
             tooltipText = s.filmTypeTip
+            contentDescription = s.filmTypeTip
             compoundDrawablePadding = ui.dp(8)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             minimumHeight = ui.dp(36)
@@ -454,7 +460,7 @@ class MainActivity : Activity() {
 
         // Queue card
         queueRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        queueEmptyText = ui.text(s.queueEmpty, 13f, alpha = 0.6f)
+        queueEmptyText = ui.text(s.queueEmpty, 13f, alpha = 0.7f)
         printQueueButton = ui.softButton(s.printQueue.format(0)) { printQueue() }
         queueCard = ui.card(
             ui.text(s.queueTitle, 16f, bold = true),
@@ -977,6 +983,27 @@ class MainActivity : Activity() {
             syncCalibration()
             onFilmChanged()
         }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 20)
+        // Printer geometry: measured with the chart, shared by both films.
+        root.addView(ui.text(s.geometryTitle, 13f, alpha = 0.7f))
+        geometryReadout = ui.text("", 13f)
+        root.addView(geometryReadout)
+        ui.space(root, 6)
+        geometryToggle = ui.softButton(s.geometryCompensate) {
+            geometry.compensate = !geometry.compensate
+            geometry.save(prefs)
+            applyGeometry()
+            refreshPreview()
+            toast(if (geometry.compensate) s.geometryCompensateOn else s.geometryCompensateOff)
+        }.apply { tooltipText = s.geometryTip }
+        root.addView(geometryToggle, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        root.addView(ui.softButton(s.geometryReset) {
+            geometry.reset()
+            geometry.save(prefs)
+            applyGeometry()
+            refreshPreview()
+            toast(s.geometryCleared)
+        }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
         ui.space(root, 16)
         val header = titleBar(s.calibrateTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 })
         calibrationTitle = header.getChildAt(0) as TextView
@@ -1043,7 +1070,7 @@ class MainActivity : Activity() {
             visibility = View.GONE
         }
         root.addView(chartStripScroll, LinearLayout.LayoutParams(ui.match, ui.wrap))
-        chartStripHint = ui.text(s.measureStripHint, 12f, alpha = 0.6f).apply { visibility = View.GONE }
+        chartStripHint = ui.text(s.measureStripHint, 12f, alpha = 0.7f).apply { visibility = View.GONE }
         root.addView(chartStripHint, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
         ui.space(root, 10)
         // The marking panel folds away once the marks are right; the strip reopens it.
@@ -1059,7 +1086,7 @@ class MainActivity : Activity() {
             }
             addView(cornerPick, LinearLayout.LayoutParams(ui.match, ui.wrap))
             addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(8)))
-            addView(ui.text(s.measureHint, 12f, alpha = 0.6f))
+            addView(ui.text(s.measureHint, 12f, alpha = 0.7f))
             addView(View(this@MainActivity), ViewGroup.LayoutParams(ui.match, ui.dp(12)))
         }
         root.addView(markPanel, LinearLayout.LayoutParams(ui.match, ui.wrap))
@@ -1374,18 +1401,22 @@ class MainActivity : Activity() {
                     if (e.reading == null || e.readingCorners?.contentEquals(c) != true) { e.reading = ChartReader.read(e.bitmap, c, type); e.readingCorners = c.clone() }
                 }
                 val reading = ChartReader.average(entries.map { it.reading!! })
-                reading to ChartReader.fit(reading, type)
+                val geometries = entries.mapNotNull { runCatching { ChartReader.measureGeometry(it.bitmap, it.corners!!) }.getOrNull() }
+                val geo = if (geometries.isEmpty()) null else FloatArray(2) { c -> geometries.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+                Triple(reading, ChartReader.fit(reading, type), geo)
             }
             mainHandler.post {
                 setBusy(false)
-                result.onSuccess { (reading, fit) ->
+                result.onSuccess { (reading, fit, geo) ->
                     val model = fit.model
                     measuredFilm = model
+                    measuredGeometry = geo
                     markPanel.visibility = View.GONE
                     syncMeasureButtons()
                     updateRectified()
                     val count = entries.size
-                    measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms))
+                    val geoText = geo?.let { g -> "\n" + s.measureGeometry.format(describeGeometry(PrinterGeometry(g[0], g[1]))) } ?: ""
+                    measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
                     val colour = !type.monochrome && reading.patches.isNotEmpty()
                     measureColourBox.visibility = if (colour) View.VISIBLE else View.GONE
@@ -1452,6 +1483,10 @@ class MainActivity : Activity() {
         val model = measuredFilm ?: return
         film = model
         film.save(prefs)
+        measuredGeometry?.let { g ->
+            geometry.stepTop = g[0]; geometry.gradientBottom = g[1]
+            geometry.save(prefs)
+        }
         syncCalibration()
         applyFilmModel()
         refreshChart()
@@ -1474,7 +1509,7 @@ class MainActivity : Activity() {
         }
         root.addView(collage, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 8)
-        root.addView(ui.text(s.collageHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
+        root.addView(ui.text(s.collageHint, 12f, alpha = 0.7f).apply { gravity = Gravity.CENTER })
         ui.space(root, 12)
         // Layout pickers: small drawings of each layout.
         val layoutRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1557,7 +1592,7 @@ class MainActivity : Activity() {
         historyList.removeAllViews()
         val files = Jobs.list(Jobs.historyDir(this)).reversed()
         if (files.isEmpty()) {
-            historyList.addView(ui.text(s.historyEmpty, 14f, alpha = 0.6f))
+            historyList.addView(ui.text(s.historyEmpty, 14f, alpha = 0.7f))
             return
         }
         val format = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
@@ -1615,6 +1650,7 @@ class MainActivity : Activity() {
         o.put("films", films)
         o.put("presets", org.json.JSONArray(prefs.getString(Presets.KEY, null) ?: "[]"))
         o.put("compensate", compensate)
+        o.put("geometry", org.json.JSONObject().put("stepTop", geometry.stepTop.toDouble()).put("gradientBottom", geometry.gradientBottom.toDouble()).put("compensate", geometry.compensate))
         o.put("filmType", filmType.key)
         return o
     }
@@ -1655,6 +1691,12 @@ class MainActivity : Activity() {
                 if (parsed.has("compensate")) {
                     compensate = parsed.optBoolean("compensate")
                     prefs.edit().putBoolean(PREF_COMPENSATE, compensate).apply()
+                }
+                parsed.optJSONObject("geometry")?.let { g ->
+                    geometry.stepTop = g.optDouble("stepTop", geometry.stepTop.toDouble()).toFloat()
+                    geometry.gradientBottom = g.optDouble("gradientBottom", geometry.gradientBottom.toDouble()).toFloat()
+                    geometry.compensate = g.optBoolean("compensate", geometry.compensate)
+                    geometry.save(prefs)
                 }
                 film = FilmModel.load(prefs, filmType)
                 chartBase = null
@@ -1744,8 +1786,8 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(ui.dp(16), ui.dp(10), ui.dp(16), ui.dp(8))
             addView(ui.softButton(s.cancel) { show(homeView) }, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
-            undoButton = ui.softButton("↶") { undo() }.apply { tooltipText = s.undo; setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f) }
-            redoButton = ui.softButton("↷") { redo() }.apply { tooltipText = s.redo; setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f) }
+            undoButton = ui.softButton("↶") { undo() }.apply { tooltipText = s.undo; contentDescription = s.undo; setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f) }
+            redoButton = ui.softButton("↷") { redo() }.apply { tooltipText = s.redo; contentDescription = s.redo; setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f) }
             val middle = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
@@ -1791,6 +1833,7 @@ class MainActivity : Activity() {
         // No tooltip here: the button is held, and a long press would pop the tooltip every time.
         val compareButton = ui.softButton(s.compare) {}.apply {
             isLongClickable = false
+            contentDescription = s.compareTip
             setOnTouchListener { v, event ->
                 when (event.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> { editorView.showOriginal = true; v.isPressed = true }
@@ -1855,7 +1898,7 @@ class MainActivity : Activity() {
         ui.space(adjust, 6)
         presetRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         adjust.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(presetRow2) })
-        adjust.addView(ui.text(s.presetHint, 12f, alpha = 0.6f))
+        adjust.addView(ui.text(s.presetHint, 12f, alpha = 0.7f))
         ui.space(adjust, 12)
 
         val lightHeader = LinearLayout(this).apply {
@@ -2186,7 +2229,7 @@ class MainActivity : Activity() {
         overlayList.removeAllViews()
         val overlays = editorView.state.overlays
         if (overlays.isEmpty()) {
-            overlayList.addView(ui.text(s.noOverlay, 13f, alpha = 0.6f))
+            overlayList.addView(ui.text(s.noOverlay, 13f, alpha = 0.7f))
             return
         }
         for (o in overlays) {
@@ -2468,10 +2511,9 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- Printing
 
-    /** The data for the printer: the look, then the inverse film model when compensation is on. */
-    /** The data for the printer: the look, then print-time sharpening for the film, then the inverse film model when compensation is on. */
+    /** The data for the printer: the look, pre-warped for the printer's geometry, sharpened for the film, then the inverse film model when compensation is on. */
     private fun renderForPrint(bitmap: Bitmap, state: EditState): Bitmap {
-        val rendered = PrintRenderer.render(bitmap, state, PREVIEW_SIZE)
+        val rendered = geometry.prewarp(PrintRenderer.render(bitmap, state, PREVIEW_SIZE))
         if (!compensate && film.printSharpness <= 0f) return rendered
         val pixels = IntArray(PREVIEW_SIZE * PREVIEW_SIZE)
         rendered.getPixels(pixels, 0, PREVIEW_SIZE, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE)
@@ -2486,6 +2528,23 @@ class MainActivity : Activity() {
         previewImage.compensated = compensate
         editorView.film = film
         editorView.compensated = compensate
+        applyGeometry()
+    }
+
+    /** The bands the frame will hide, on the home preview and in the editor, and the calibration readout. */
+    private fun applyGeometry() {
+        previewImage.hiddenTop = geometry.hiddenTop; previewImage.hiddenBottom = geometry.hiddenBottom
+        editorView.hiddenTop = geometry.hiddenTop; editorView.hiddenBottom = geometry.hiddenBottom
+        if (::geometryReadout.isInitialized) {
+            geometryReadout.text = describeGeometry(geometry)
+            geometryToggle.setTextColor(if (geometry.compensate) ui.accent else labelColor)
+            ui.setEnabledLook(geometryToggle, geometry.measured)
+        }
+    }
+
+    private fun describeGeometry(g: PrinterGeometry): String {
+        if (!g.measured) return s.geometryNone
+        return s.geometryReadout.format((g.stretch - 1f) * 100f, g.hiddenTop * 100f, g.hiddenBottom * 100f)
     }
 
     private fun setFilmType(type: FilmType) {

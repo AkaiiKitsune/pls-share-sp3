@@ -33,6 +33,14 @@ class PhotoEditorView(context: Context) : View(context) {
         }
 
     /** Simulate the film's rendering on screen (display only). */
+    /** Fractions of the image hidden under the printer's frame at the top and bottom, drawn as dark bands. */
+    var hiddenTop = 0f
+        set(value) { field = value; invalidate() }
+    var hiddenBottom = 0f
+        set(value) { field = value; invalidate() }
+    private val hiddenPaint = Paint().apply { color = 0x73000000 }
+    private val hiddenLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f; color = 0xB3FFFFFF.toInt() }
+
     var filmPreview = false
         set(value) { field = value; frameDirty = true; invalidate() }
 
@@ -550,6 +558,19 @@ class PhotoEditorView(context: Context) : View(context) {
                 canvas.drawText(String.format(java.util.Locale.US, "%.1f°", state.rotation), l + 16f, t + size - 16f, textPaint)
             }
         }
+        drawHidden(canvas, l, t, size)
         canvas.drawRect(l, t, l + size, t + size, framePaint)
+    }
+
+    /** The parts of the image the frame will hide, if the printer's geometry was measured. */
+    private fun drawHidden(canvas: Canvas, l: Float, t: Float, size: Float) {
+        if (hiddenTop > 0f) {
+            canvas.drawRect(l, t, l + size, t + size * hiddenTop, hiddenPaint)
+            canvas.drawLine(l, t + size * hiddenTop, l + size, t + size * hiddenTop, hiddenLine)
+        }
+        if (hiddenBottom > 0f) {
+            canvas.drawRect(l, t + size * (1f - hiddenBottom), l + size, t + size, hiddenPaint)
+            canvas.drawLine(l, t + size * (1f - hiddenBottom), l + size, t + size * (1f - hiddenBottom), hiddenLine)
+        }
     }
 }

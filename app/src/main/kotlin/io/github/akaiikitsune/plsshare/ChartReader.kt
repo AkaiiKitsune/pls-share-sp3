@@ -434,6 +434,44 @@ object ChartReader {
         return DoubleArray(9) { if (it < 8) m[it][8] else 1.0 }
     }
 
+    // ------------------------------------------------------------ Printer geometry
+
+    /**
+     * Where the grey steps' top (file 4 %) and the gradient's bottom (file 96 %) actually are on
+     * the print, in chart coordinates aligned on the patch grid: the vertical profiles are scanned
+     * from outside the chart inwards until the first dark pixel. Null when either is not found.
+     */
+    fun measureGeometry(photo: Bitmap, corners: FloatArray): FloatArray? {
+        val h = homography(corners)
+        val full = IntArray(photo.width * photo.height)
+        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
+        fun luma(x: Double, y: Double): Float {
+            val p = map(h, x, y)
+            val c = sample(full, photo.width, photo.height, p[0], p[1])
+            return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f
+        }
+        // The chart's own white, between the steps and the patches.
+        val white = (0 until 5).map { luma(0.3 + it * 0.1, 0.2) }.sorted()[2]
+        if (white < 60f) return null
+        val threshold = white * 0.5f
+        // From inside the dark element outwards, until the first bright pixel (so a dark table
+        // beyond the print cannot be mistaken for content): three columns, the median of them.
+        fun scan(xs: List<Double>, from: Double, step: Double, limit: Double): Float? {
+            val found = xs.mapNotNull { x ->
+                if (luma(x, from) >= threshold) return@mapNotNull null // not dark where the element should be
+                var y = from
+                var hit: Double? = null
+                while (if (step < 0) y >= limit else y <= limit) { if (luma(x, y) >= threshold) { hit = y; break }; y += step }
+                hit
+            }
+            return if (found.size < 2) null else found.sorted()[found.size / 2].toFloat()
+        }
+        val stepTop = scan(listOf(0.08, 0.11, 0.14), 0.11, -0.0025, -0.12) ?: return null
+        val gradientBottom = scan(listOf(0.08, 0.12, 0.16), 0.91, 0.0025, 1.12) ?: return null
+        if (stepTop < -0.1f || stepTop > 0.12f || gradientBottom < 0.88f || gradientBottom > 1.1f) return null
+        return floatArrayOf(stepTop, gradientBottom)
+    }
+
     // ------------------------------------------------------------ Anchors: the four corner patches
 
     /** Grid positions (column, row) of the four anchor patches: red, cyan, grey, sky blue. */
