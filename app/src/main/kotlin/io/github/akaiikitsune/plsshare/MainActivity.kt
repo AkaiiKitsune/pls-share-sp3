@@ -77,6 +77,10 @@ class MainActivity : Activity() {
         private const val MENU_COMPENSATE = 9
         private const val MENU_COLLAGE = 10
         private const val REQUEST_PICK_CELL = 4
+        private const val REQUEST_PICK_CHART = 11
+        private const val REQUEST_SHOOT_CHART = 12
+        /** Longest side of the chart photo the reader works on (enough for 9×9 samples per patch). */
+        private const val CHART_PHOTO_SIDE = 2000
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
         private const val UNDO_DEPTH = 40
@@ -115,6 +119,15 @@ class MainActivity : Activity() {
     private lateinit var collageView: View
     private lateinit var collage: CollageView
     private var pendingCell = -1
+    private lateinit var measureView: View
+    private lateinit var cornerPick: CornerPickView
+    private lateinit var measureRunButton: Button
+    private lateinit var measureResetButton: Button
+    private lateinit var measureResultBox: LinearLayout
+    private lateinit var measureReport: TextView
+    private lateinit var measureCompare: ImageView
+    private var measuredFilm: FilmModel? = null
+    private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
     private lateinit var film: FilmModel
     private var compensate = false
@@ -248,6 +261,7 @@ class MainActivity : Activity() {
         guideView = buildGuide()
         historyView = buildHistory()
         calibrateView = buildCalibration()
+        measureView = buildMeasure()
         collageView = buildCollage()
         container.addView(homeView)
         applyFilmType()
@@ -290,7 +304,11 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (container.getChildAt(0) !== homeView) show(homeView) else @Suppress("DEPRECATION") super.onBackPressed()
+        when {
+            container.getChildAt(0) === measureView -> show(calibrateView)
+            container.getChildAt(0) !== homeView -> show(homeView)
+            else -> @Suppress("DEPRECATION") super.onBackPressed()
+        }
     }
 
     private fun show(screen: View) {
@@ -669,6 +687,19 @@ class MainActivity : Activity() {
                 mainHandler.post { result.onSuccess { collage.setCell(cell, it) }.onFailure { message(s.photoError.format(it.message ?: "")) } }
             }.start()
         }
+        if (requestCode == REQUEST_PICK_CHART && resultCode == RESULT_OK && data?.data != null) loadChartPhoto(data.data!!)
+        if (requestCode == REQUEST_SHOOT_CHART) {
+            val uri = shootUri
+            shootUri = null
+            if (uri != null) {
+                if (resultCode == RESULT_OK) {
+                    contentResolver.update(uri, android.content.ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+                    loadChartPhoto(uri)
+                } else {
+                    contentResolver.delete(uri, null, null)
+                }
+            }
+        }
         if (requestCode == REQUEST_PICK_MANY && resultCode == RESULT_OK && data != null) {
             val uris = ArrayList<Uri>()
             val clip = data.clipData
@@ -795,6 +826,8 @@ class MainActivity : Activity() {
         root.addView(chartView, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 10)
         root.addView(ui.softButton(s.printChart) { printChart() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 8)
+        root.addView(ui.softButton(s.measureFromPhoto) { openMeasure() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 16)
 
         fun calSlider(label: String, min: Int, max: Int, read: () -> Int, colourOnly: Boolean = false, write: (Int) -> Unit) {
@@ -874,6 +907,172 @@ class MainActivity : Activity() {
         if (connected == null) return message(s.notConnectedYet)
         val file = Jobs.save(Jobs.queueDir(this), TestChart.render(PREVIEW_SIZE, filmType))
         startPrinting(listOf(file), archive = false)
+    }
+
+    // ---------------------------------------------------------------- Chart measurement
+
+    private fun buildMeasure(): View {
+        val root = ui.column(20)
+        root.addView(ui.text(s.measureIntro, 14f))
+        ui.space(root, 12)
+        val pick = ui.softButton(s.measurePick) { pickChartPhoto() }
+        val shoot = ui.softButton(s.measureShoot) { shootChartPhoto() }
+        root.addView(ui.row(pick, shoot), LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 12)
+        cornerPick = CornerPickView(this).apply {
+            background = ui.rounded(Ui.CARD, 12)
+            clipToOutline = true
+            onChanged = { syncMeasureButtons() }
+        }
+        root.addView(cornerPick, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 8)
+        root.addView(ui.text(s.measureHint, 12f, alpha = 0.6f))
+        ui.space(root, 12)
+        measureResetButton = ui.softButton(s.measureReset) { cornerPick.reset(); hideMeasureResult() }
+        measureRunButton = ui.primaryButton(s.measureRun) { runMeasure() }
+        root.addView(ui.row(measureResetButton, measureRunButton), LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 16)
+
+        measureResultBox = ui.column().apply { visibility = View.GONE }
+        measureReport = ui.text("", 13f, alpha = 0.7f)
+        measureResultBox.addView(measureReport)
+        ui.space(measureResultBox, 8)
+        measureCompare = object : ImageView(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val w = MeasureSpec.getSize(widthMeasureSpec)
+                setMeasuredDimension(w, w * 2 / 11)
+            }
+        }.apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            background = ui.rounded(Ui.CARD, 12)
+            clipToOutline = true
+        }
+        measureResultBox.addView(measureCompare, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(measureResultBox, 12)
+        measureResultBox.addView(ui.primaryButton(s.measureApply) { applyMeasured() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        root.addView(measureResultBox, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 16)
+
+        syncMeasureButtons()
+        val header = titleBar(s.measureTitle, ui.softButton(s.back) { show(calibrateView) }.apply { minimumWidth = 0 })
+        return fixedHeaderScreen(header, root)
+    }
+
+    private fun openMeasure() {
+        hideMeasureResult()
+        show(measureView)
+    }
+
+    private fun syncMeasureButtons() {
+        val hasPhoto = cornerPick.bitmap != null
+        ui.setEnabledLook(measureResetButton, hasPhoto && cornerPick.corners.isNotEmpty())
+        ui.setEnabledLook(measureRunButton, hasPhoto && cornerPick.complete)
+        if (!cornerPick.complete) hideMeasureResult()
+    }
+
+    private fun hideMeasureResult() {
+        measuredFilm = null
+        measureResultBox.visibility = View.GONE
+    }
+
+    private fun pickChartPhoto() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Intent(MediaStore.ACTION_PICK_IMAGES)
+        else Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+        startActivityForResult(intent, REQUEST_PICK_CHART)
+    }
+
+    /** Take the photo with the camera app, straight into the gallery (a pending MediaStore entry, no file provider needed). */
+    private fun shootChartPhoto() {
+        val values = android.content.ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "instax-chart-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = try {
+            contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        } catch (e: Exception) { null } ?: return message(s.measureFailed.format("MediaStore"))
+        shootUri = uri
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+            .putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            startActivityForResult(intent, REQUEST_SHOOT_CHART)
+        } catch (e: Exception) {
+            shootUri = null
+            contentResolver.delete(uri, null, null)
+            message(s.measureFailed.format(e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    private fun loadChartPhoto(uri: Uri) {
+        setBusy(true)
+        Thread {
+            val result = runCatching { Photos.scaledForEditing(Photos.load(contentResolver, uri), CHART_PHOTO_SIDE) }
+            mainHandler.post {
+                setBusy(false)
+                result.onSuccess {
+                    cornerPick.bitmap = it
+                    hideMeasureResult()
+                    syncMeasureButtons()
+                }.onFailure { message(s.photoError.format(it.message ?: "")) }
+            }
+        }.start()
+    }
+
+    private fun runMeasure() {
+        val photo = cornerPick.bitmap ?: return
+        val corners = cornerPick.cornersArray() ?: return
+        val type = filmType
+        setBusy(true)
+        Thread {
+            val result = runCatching {
+                val reading = ChartReader.read(photo, corners, type)
+                val (model, report) = ChartReader.fit(reading, type)
+                Triple(reading, model, report)
+            }
+            mainHandler.post {
+                setBusy(false)
+                result.onSuccess { (reading, model, report) ->
+                    measuredFilm = model
+                    measureReport.text = s.measureResult.format(report)
+                    measureCompare.setImageBitmap(comparisonStrip(reading, model))
+                    measureResultBox.visibility = View.VISIBLE
+                    journal("chart measured: $report, paper white ${reading.paperWhite.joinToString { Math.round(it).toString() }}")
+                }.onFailure { message(s.measureFailed.format(it.message ?: it.javaClass.simpleName)) }
+            }
+        }.start()
+    }
+
+    /** Two rows of 11 grey steps: measured on the print above, simulated by the fitted model below. */
+    private fun comparisonStrip(reading: ChartReader.Reading, model: FilmModel): Bitmap {
+        val n = reading.greys.size
+        val cell = 40
+        val bitmap = Bitmap.createBitmap(n * cell, 2 * cell, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint()
+        for (i in 0 until n) {
+            val g = reading.greys[i]
+            paint.color = Color.rgb(Math.round(g[0].coerceIn(0f, 1f) * 255), Math.round(g[1].coerceIn(0f, 1f) * 255), Math.round(g[2].coerceIn(0f, 1f) * 255))
+            canvas.drawRect(i * cell.toFloat(), 0f, (i + 1) * cell.toFloat(), cell.toFloat(), paint)
+            val v = Math.round(i * 255f / (n - 1))
+            val px = intArrayOf(Color.rgb(v, v, v))
+            model.simulate(px)
+            paint.color = px[0]
+            canvas.drawRect(i * cell.toFloat(), cell.toFloat(), (i + 1) * cell.toFloat(), 2 * cell.toFloat(), paint)
+        }
+        return bitmap
+    }
+
+    private fun applyMeasured() {
+        val model = measuredFilm ?: return
+        film = model
+        film.save(prefs)
+        syncCalibration()
+        applyFilmModel()
+        refreshChart()
+        refreshPreview()
+        toast(s.measureApplied)
+        show(calibrateView)
     }
 
     // ---------------------------------------------------------------- Collage

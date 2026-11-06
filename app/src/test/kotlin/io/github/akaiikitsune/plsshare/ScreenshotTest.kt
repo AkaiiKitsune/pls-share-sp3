@@ -110,6 +110,25 @@ class ScreenshotTest {
         collage.setCell(0, sample)
         collage.setCell(2, sample)
         shoot(collageScreen, "08-collage", w, h)
+
+        // Measurement screen with the daylight chart photo, corners marked and the fit shown.
+        val chart = javaClass.getResourceAsStream("/chart-daylight.jpg")?.use { android.graphics.BitmapFactory.decodeStream(it) }
+        if (chart != null) {
+            val scaled = Photos.scaledForEditing(chart, 2000)
+            val k = scaled.width.toFloat() / chart.width
+            val cornerPick = field(activity, "cornerPick") as CornerPickView
+            cornerPick.bitmap = scaled
+            for ((x, y) in listOf(639 to 1214, 2332 to 1226, 2320 to 2824, 627 to 2812)) cornerPick.corners += floatArrayOf(x * k, y * k)
+            call(activity, "syncMeasureButtons")
+            val reading = ChartReader.read(scaled, cornerPick.cornersArray()!!, FilmType.COLOR)
+            val (model, report) = ChartReader.fit(reading, FilmType.COLOR)
+            (field(activity, "measureReport") as android.widget.TextView).text = "Résultat : $report."
+            val strip = MainActivity::class.java.getDeclaredMethod("comparisonStrip", ChartReader.Reading::class.java, FilmModel::class.java).apply { isAccessible = true }
+            (field(activity, "measureCompare") as android.widget.ImageView).setImageBitmap(strip.invoke(activity, reading, model) as Bitmap)
+            (field(activity, "measureResultBox") as View).visibility = View.VISIBLE
+            val measure = field(activity, "measureView") as View
+            shoot(measure, "09-measure", w, h, scrollTo = 300)
+        }
     }
 
     private fun findScroll(root: View): android.widget.ScrollView? {

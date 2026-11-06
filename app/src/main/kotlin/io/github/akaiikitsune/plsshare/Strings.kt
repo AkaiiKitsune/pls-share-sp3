@@ -201,6 +201,21 @@ class Strings private constructor(private val fr: Boolean) {
     val calTint get() = t("Dominante vert ↔ magenta", "Green ↔ magenta cast")
     val calBlue get() = t("Assombrissement des bleus", "Blue darkening")
     val calReset get() = t("Valeurs par défaut", "Default values")
+    val measureTitle get() = t("Mesurer la mire", "Measure the chart")
+    val measureFromPhoto get() = t("Mesurer depuis une photo du tirage", "Measure from a photo of the print")
+    val measureIntro get() = t(
+        "Imprimez la mire, photographiez le tirage à plat avec le cadre blanc entièrement visible, puis indiquez les quatre coins de la zone image. L'appli lit les gris et les couleurs, les rapporte au blanc du cadre (ce qui annule la lumière, jour ou flash) et en déduit les réglages du film.",
+        "Print the chart, photograph the print flat with the white frame fully visible, then mark the four corners of the image area. The app reads the greys and colours, relates them to the frame's white (which cancels the light, daylight or flash) and derives the film settings.",
+    )
+    val measurePick get() = t("Choisir une photo", "Choose a photo")
+    val measureShoot get() = t("Photographier", "Take a photo")
+    val measureHint get() = t("Touchez les quatre coins de la zone image (pas du cadre), dans l'ordre : haut gauche, haut droit, bas droit, bas gauche. Faites glisser un repère pour l'ajuster. Lumière du jour, sans reflet, le cadre blanc entièrement visible.", "Tap the four corners of the image area (not the frame), in order: top left, top right, bottom right, bottom left. Drag a marker to adjust it. Daylight, no glare, the white frame fully visible.")
+    val measureReset get() = t("Recommencer", "Start over")
+    val measureRun get() = t("Mesurer", "Measure")
+    val measureResult get() = t("Résultat : %s. En haut les gris mesurés sur le tirage, en bas ceux que simule le nouveau modèle.", "Result: %s. Top: the greys measured on the print; bottom: the greys the new model simulates.")
+    val measureApply get() = t("Appliquer ces valeurs", "Apply these values")
+    val measureApplied get() = t("Calibration mesurée appliquée.", "Measured calibration applied.")
+    val measureFailed get() = t("Mesure impossible : %s", "Could not measure: %s")
     val calPrintSharpness get() = t("Netteté ajoutée à l'impression (le film adoucit)", "Sharpening added at print time (the film softens)")
     val ratio get() = t("Format de la photo", "Photo ratio")
     val ratioSquare get() = "1:1"

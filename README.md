@@ -64,6 +64,8 @@ Un sélecteur **Film : Couleur / Monochrome** sur l'accueil choisit le film char
 
 Chaque imprimante et chaque lot de film diffèrent : menu ⋮ → **Calibrer l'aperçu film** affiche une **mire** (gris par paliers, 16 patches dont des teintes chair, dégradé continu) à imprimer une fois, puis des curseurs pour ajuster le modèle jusqu'à ce que la mire simulée à l'écran ressemble au tirage, à la lumière du jour. Les valeurs sont mémorisées.
 
+**Mesure automatique** : **Mesurer depuis une photo du tirage** (dans la calibration) prend ou choisit une photo du tirage de la mire, posé à plat avec son cadre blanc entièrement visible. On touche les quatre coins de la zone image (haut gauche, haut droit, bas droit, bas gauche ; les repères se déplacent au doigt), puis **Mesurer** : la photo est redressée par homographie, chaque patch est moyenné en son centre, et tout est rapporté au **blanc du cadre** mesuré juste autour de l'image, avec un gradient entre côtés opposés pour corriger une lumière inégale. Ce blanc de référence annule la luminosité et la couleur de l'éclairage (jour ou flash) et l'exposition du téléphone. Le modèle est ensuite ajusté (`ChartReader.kt`) : niveaux de noir et de blanc sur les paliers extrêmes, seuils d'écrêtage là où les paliers cessent d'être plats, gamma par la médiane des demi-tons, chaleur des noirs sur le palier le plus sombre, dominantes sur les gris moyens, saturation par le rapport des chromas mesurées aux chromas prédites, assombrissement des bleus sur le patch bleu. L'écran affiche l'erreur RMS du modèle sur les gris et deux rangées de paliers (mesurés / simulés) avant d'**appliquer**. Deux photos du même tirage (lumière du jour et flash, dans `app/src/test/resources`) donnent des modèles proches, mais le flash lève un peu les noirs et les demi-tons par son reflet : préférez la lumière du jour indirecte.
+
 Menu ⋮ → **Compenser le tirage** applique l'**inverse du modèle** aux données envoyées à l'imprimante (plus clair, moins contrasté, dominante corrigée, bleus relevés) pour que le tirage ressemble à l'écran. Ce que le film ne peut pas rendre (extrêmes écrêtés, bleus très saturés) reste hors de portée ; l'aperçu film montre alors ce qui restera perdu. La mire s'imprime toujours sans compensation.
 
 ### Pourquoi une adresse IP fixe
@@ -160,6 +162,10 @@ app/src/main/kotlin/io/github/akaiikitsune/plsshare/
   PrinterNetwork.kt  sockets liés au Wi-Fi courant (ou demandé en debug)
   PhotoEditorView.kt zoom / déplacement au doigt
   Photos.kt          chargement EXIF-correct, rendu du tirage (cadrage, couleurs)
+  Film.kt            modèle de film (simulation / compensation), mires
+  ChartReader.kt     lecture d'une photo de la mire et ajustement du modèle
+  CornerPickView.kt  pointage des coins de la mire
+  CollageView.kt     collages
   Ui.kt              widgets et styles
   Strings.kt         textes FR/EN
 ```
