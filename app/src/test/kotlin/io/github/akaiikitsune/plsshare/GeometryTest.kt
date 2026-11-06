@@ -35,9 +35,12 @@ class GeometryTest {
             val values = results.map { it[c] }
             assertTrue("spread of edge $c: ${values.max() - values.min()}", values.max() - values.min() < 0.05f)
         }
-        // Columns match the file within a couple of percent.
-        assertEquals(PrinterGeometry.STEP_LEFT_FILE, results.map { it[2] }.average().toFloat(), 0.025f)
-        assertEquals(PrinterGeometry.PATCH_RIGHT_FILE, results.map { it[3] }.average().toFloat(), 0.025f)
+        // Columns match the chart within a couple of percent (content coordinates).
+        assertEquals(0.04f, results.map { it[2] }.average().toFloat(), 0.025f)
+        assertEquals(0.948f, results.map { it[3] }.average().toFloat(), 0.025f)
+        // Through set(), the geometry's stretch is the content's.
+        val g = PrinterGeometry().apply { set(results[0]) }
+        assertEquals((results[0][1] - results[0][0]) / 0.92f, g.stretch, 1e-3f)
         // And show the stretch: the gradient's bottom lands lower than in the file.
         assertTrue(results.map { it[1] }.average() > 0.965)
     }
@@ -52,7 +55,7 @@ class GeometryTest {
         assertTrue(none.prewarp(image) === image)
         assertEquals(0f, none.hiddenTop, 0f); assertEquals(0f, none.hiddenBottom, 0f)
 
-        val g = PrinterGeometry(stepTop = 0.01f, gradientBottom = 0.98f)
+        val g = PrinterGeometry().apply { set(floatArrayOf(0.01f, 0.98f)) }
         assertTrue(g.measured)
         assertTrue("stretch %.3f".format(g.stretch), g.stretch > 1.04f && g.stretch < 1.07f)
         val warped = g.prewarp(image)
@@ -69,17 +72,19 @@ class GeometryTest {
         g.compensate = false
         assertEquals(0.04f, g.hiddenTop, 1e-4f); assertEquals(0.03f, g.hiddenBottom, 1e-4f); assertEquals(0.01f, g.hiddenRight, 1e-4f)
         // Columns: a 2 % horizontal stretch is modelled and pre-warped too.
-        val gx = PrinterGeometry(stepLeft = 0.04f, patchRight = 0.966f)
+        val gx = PrinterGeometry().apply { set(floatArrayOf(0.04f, 0.96f, 0.04f, 0.966f)) }
         assertTrue("stretchX %.3f".format(gx.stretchX), gx.stretchX > 1.015f && gx.stretchX < 1.025f)
         val warpedX = gx.prewarp(image)
         assertEquals(64, warpedX.width)
         // The framing chart renders with its rectangles.
-        val framing = TestChart.renderFraming(800)
-        // A dark line within the first 1.5 % (the 1 % rectangle), white further in between the rectangles' labels.
-        assertTrue((2..12).any { Color.red(framing.getPixel(400, it)) < 80 })
-        assertEquals(Color.WHITE, framing.getPixel(400, 200))
+        // The combined chart: the ring's 1 % line near the edge, white between the ring and the content, the content inside.
+        val chart = TestChart.render(800, FilmType.COLOR)
+        assertTrue((2..12).any { Color.red(chart.getPixel(400, it)) < 80 })
+        assertEquals(Color.WHITE, chart.getPixel(400, 78))
+        assertTrue(Color.red(chart.getPixel(Math.round(800 * TestChart.contentToFile(0.08f)), Math.round(800 * TestChart.contentToFile(0.11f)))) < 60) // the black step
         java.io.File(System.getProperty("screenshots.dir") ?: "build/screenshots").apply { mkdirs() }.let { dir ->
-            java.io.FileOutputStream(java.io.File(dir, "chart-framing.png")).use { framing.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            java.io.FileOutputStream(java.io.File(dir, "chart-colour.png")).use { chart.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            java.io.FileOutputStream(java.io.File(dir, "chart-mono.png")).use { TestChart.render(800, FilmType.MONO).compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
 }

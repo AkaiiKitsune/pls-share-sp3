@@ -41,7 +41,7 @@ class ChartReaderTest {
     fun `synthetic chart through a known model is recovered`() {
         // Render the chart, simulate a film, read it back with identity corners.
         val truth = FilmModel.defaults(FilmType.COLOR)
-        val chart = TestChart.render(600, FilmType.COLOR)
+        val chart = TestChart.renderContent(600, FilmType.COLOR)
         val simulated = truth.simulated(chart)
         // Put it on a "paper" canvas with a white border so the paper white can be sampled.
         val paper = android.graphics.Bitmap.createBitmap(800, 800, android.graphics.Bitmap.Config.ARGB_8888)
@@ -74,7 +74,7 @@ class ChartReaderTest {
             hueShift[3] = -25f; hueGain[3] = 1.1f  // cyans drift towards blue (as seen on real prints)
             hueValue[2] = 0.5f                      // greens print much darker (as seen on real prints)
         }
-        val chart = TestChart.render(600, FilmType.COLOR)
+        val chart = TestChart.renderContent(600, FilmType.COLOR)
         val simulated = truth.simulated(chart)
         val paper = android.graphics.Bitmap.createBitmap(800, 800, android.graphics.Bitmap.Config.ARGB_8888)
         val c = android.graphics.Canvas(paper)

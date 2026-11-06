@@ -695,28 +695,68 @@ class FilmModel(
 
 /** Test charts to print once and compare with the screen. */
 object TestChart {
-    /** Side of the black squares printed near the four corners of the image area, as a fraction of the chart. */
-    const val FIDUCIAL = 0.03f
-    /** Distance of the squares from the image edges: the instax frame hides a sliver of the image. */
-    const val FIDUCIAL_INSET = 0.03f
+    /**
+     * The chart is one print doing two jobs: a framing ring around the edge (nested rectangles
+     * every 1 % from the file's edge, numbered, so the print shows how much the frame hides on each
+     * side), and the colour or monochrome content centred inside it, scaled to [CONTENT] of the
+     * file. The reader works in content coordinates (0..1 over the content square); [contentToFile]
+     * converts a content position to a file position.
+     */
+    const val CONTENT = 0.78f
+    const val CONTENT_INSET = (1f - CONTENT) / 2f
 
-    fun render(size: Int, type: FilmType, fiducials: Boolean = true): Bitmap =
-        (if (type.monochrome) renderMono(size) else render(size)).also { if (fiducials) drawFiducials(it) }
+    fun contentToFile(c: Float): Float = CONTENT_INSET + c * CONTENT
+    fun fileToContent(f: Float): Float = (f - CONTENT_INSET) / CONTENT
+
+    fun render(size: Int, type: FilmType): Bitmap {
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.WHITE)
+        drawFramingRing(canvas, size)
+        val inner = Math.round(size * CONTENT)
+        val content = if (type.monochrome) renderMono(inner) else renderColour(inner)
+        canvas.drawBitmap(content, size * CONTENT_INSET, size * CONTENT_INSET, Paint(Paint.FILTER_BITMAP_FLAG))
+        return bitmap
+    }
+
+    /** The content alone (grey steps, patches, gradient), as the reader expects it in content coordinates. */
+    fun renderContent(size: Int, type: FilmType): Bitmap = if (type.monochrome) renderMono(size) else renderColour(size)
 
     /**
-     * Four black squares in the corners: the darkest, outermost marks of the chart, so a photo of
-     * the print can be aligned automatically (see [ChartReader.detectCorners]).
+     * Nested rectangles 1 % to 8 % in from the file's edges, each numbered on all four sides, and a
+     * bold line on the edge itself. On the print, the first rectangle that shows whole on a side is
+     * how much the frame hides there.
      */
-    private fun drawFiducials(bitmap: Bitmap) {
-        val size = bitmap.width.toFloat()
-        val f = size * FIDUCIAL
-        val i = size * FIDUCIAL_INSET
-        val canvas = Canvas(bitmap)
-        val paint = Paint().apply { color = Color.BLACK }
-        canvas.drawRect(i, i, i + f, i + f, paint)
-        canvas.drawRect(size - i - f, i, size - i, i + f, paint)
-        canvas.drawRect(size - i - f, size - i - f, size - i, size - i, paint)
-        canvas.drawRect(i, size - i - f, i + f, size - i, paint)
+    private fun drawFramingRing(canvas: Canvas, size: Int) {
+        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.BLACK }
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textAlign = Paint.Align.CENTER; typeface = android.graphics.Typeface.DEFAULT_BOLD }
+        val white = Paint().apply { color = Color.WHITE }
+        line.strokeWidth = size * 0.006f
+        canvas.drawRect(size * 0.003f, size * 0.003f, size - size * 0.003f, size - size * 0.003f, line)
+        for (pct in 1..8) {
+            val inset = size * pct / 100f
+            line.strokeWidth = size * (if (pct % 2 == 0) 0.004f else 0.002f)
+            canvas.drawRect(inset, inset, size - inset, size - inset, line)
+        }
+        // Each rectangle's number just inside it, at its own position along the side, on a white patch.
+        text.textSize = size * 0.022f
+        for (pct in 1..8) {
+            val inset = size * pct / 100f
+            val along = size * (0.12f + 0.1f * pct)
+            val label = "$pct"
+            val tw = text.measureText(label)
+            val th = text.textSize
+            val pad = size * 0.003f
+            fun stamp(cx: Float, cy: Float) {
+                canvas.drawRect(cx - tw / 2 - pad, cy - th * 0.78f - pad, cx + tw / 2 + pad, cy + th * 0.22f + pad, white)
+                canvas.drawText(label, cx, cy, text)
+            }
+            val depth = inset + size * 0.004f
+            stamp(along, depth + th * 0.78f)
+            stamp(along, size - depth - th * 0.22f)
+            stamp(depth + tw / 2 + pad, along + th * 0.28f)
+            stamp(size - depth - tw / 2 - pad, along + th * 0.28f)
+        }
     }
 
     /** Monochrome chart: coarse and fine grey scales, a few luminance patches, a continuous gradient. */
@@ -765,59 +805,6 @@ object TestChart {
         return bitmap
     }
 
-    /**
-     * The framing chart: nested rectangles 1 % to 8 % in from the file's edges, each labelled with
-     * its inset on all four sides, a bold line on the edge itself, and a centre cross. On the print,
-     * the first rectangle that shows whole on a side is how much the frame hides there.
-     */
-    fun renderFraming(size: Int): Bitmap {
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(Color.WHITE)
-        val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.BLACK }
-        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textAlign = Paint.Align.CENTER; typeface = android.graphics.Typeface.DEFAULT_BOLD }
-        // The file's own edge.
-        line.strokeWidth = size * 0.006f
-        canvas.drawRect(size * 0.003f, size * 0.003f, size - size * 0.003f, size - size * 0.003f, line)
-        for (pct in 1..8) {
-            val inset = size * pct / 100f
-            line.strokeWidth = size * (if (pct % 2 == 0) 0.004f else 0.002f)
-            canvas.drawRect(inset, inset, size - inset, size - inset, line)
-        }
-        // Labels: each rectangle's number just inside it, at its own position along the side so
-        // that labels never overlap, on a white patch that clears the lines underneath.
-        val white = Paint().apply { color = Color.WHITE }
-        text.textSize = size * 0.026f
-        for (pct in 1..8) {
-            val inset = size * pct / 100f
-            val along = size * (0.12f + 0.1f * pct)
-            val label = "$pct"
-            val tw = text.measureText(label)
-            val th = text.textSize
-            val pad = size * 0.003f
-            fun stamp(cx: Float, cy: Float) {
-                canvas.drawRect(cx - tw / 2 - pad, cy - th * 0.78f - pad, cx + tw / 2 + pad, cy + th * 0.22f + pad, white)
-                canvas.drawText(label, cx, cy, text)
-            }
-            val depth = inset + size * 0.004f
-            stamp(along, depth + th * 0.78f)                    // top
-            stamp(along, size - depth - th * 0.22f)             // bottom
-            stamp(depth + tw / 2 + pad, along + th * 0.28f)     // left
-            stamp(size - depth - tw / 2 - pad, along + th * 0.28f) // right
-        }
-        // Centre cross and a title.
-        line.strokeWidth = size * 0.003f
-        canvas.drawLine(size * 0.45f, size * 0.5f, size * 0.55f, size * 0.5f, line)
-        canvas.drawLine(size * 0.5f, size * 0.45f, size * 0.5f, size * 0.55f, line)
-        text.textSize = size * 0.03f
-        canvas.drawText("pls share SP-3 · cadrage / framing", size * 0.5f, size * 0.42f, text)
-        text.textSize = size * 0.024f
-        text.typeface = android.graphics.Typeface.DEFAULT
-        canvas.drawText("premier rectangle entier = % caché", size * 0.5f, size * 0.60f, text)
-        canvas.drawText("first whole rectangle = % hidden", size * 0.5f, size * 0.635f, text)
-        return bitmap
-    }
-
     val greys = (0..10).map { Math.round(it * 25.5f) }
     val patches = listOf(
         Color.rgb(200, 40, 40), Color.rgb(40, 170, 60), Color.rgb(40, 70, 200), Color.rgb(0, 190, 210),
@@ -826,7 +813,8 @@ object TestChart {
         Color.rgb(110, 160, 230), Color.rgb(170, 200, 120), Color.rgb(230, 170, 190), Color.rgb(120, 120, 120),
     )
 
-    fun render(size: Int): Bitmap {
+    /** Colour content: 11 grey steps, 16 patches, a gradient. */
+    fun renderColour(size: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)

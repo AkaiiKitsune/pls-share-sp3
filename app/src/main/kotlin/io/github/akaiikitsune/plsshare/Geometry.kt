@@ -33,10 +33,11 @@ class PrinterGeometry(
     var cutRight: Float = 0f,
 ) {
     companion object {
-        const val STEP_TOP_FILE = 0.04f
-        const val GRADIENT_BOTTOM_FILE = 0.96f
-        const val STEP_LEFT_FILE = 0.04f
-        const val PATCH_RIGHT_FILE = 0.948f
+        /** File positions of the chart's reference lines (content positions through [TestChart.contentToFile]). */
+        val STEP_TOP_FILE = TestChart.contentToFile(0.04f)
+        val GRADIENT_BOTTOM_FILE = TestChart.contentToFile(0.96f)
+        val STEP_LEFT_FILE = TestChart.contentToFile(0.04f)
+        val PATCH_RIGHT_FILE = TestChart.contentToFile(0.948f)
         private const val PREFIX = "geometry."
 
         fun load(prefs: SharedPreferences) = PrinterGeometry(
@@ -66,10 +67,10 @@ class PrinterGeometry(
     /** Whether the frame's cuts were entered. */
     val cutsKnown: Boolean get() = cutTop > 0f || cutBottom > 0f || cutLeft > 0f || cutRight > 0f
 
-    /** Set from a measurement (top, bottom, left, right print positions of the four reference lines). */
+    /** Set from a measurement in content coordinates (top, bottom[, left, right] of the four reference lines). */
     fun set(measured: FloatArray) {
-        stepTop = measured[0]; gradientBottom = measured[1]
-        if (measured.size >= 4) { stepLeft = measured[2]; patchRight = measured[3] }
+        stepTop = TestChart.contentToFile(measured[0]); gradientBottom = TestChart.contentToFile(measured[1])
+        if (measured.size >= 4) { stepLeft = TestChart.contentToFile(measured[2]); patchRight = TestChart.contentToFile(measured[3]) }
     }
 
     /** Whether anything was measured; without a measurement the map is the identity and nothing is shown or warped. */

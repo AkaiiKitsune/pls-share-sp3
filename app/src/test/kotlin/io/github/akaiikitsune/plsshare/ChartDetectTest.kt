@@ -21,8 +21,9 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31])
 class ChartDetectTest {
     /** A print of the chart (white frame around the image) photographed on a dark table, with perspective. */
-    private fun photo(type: FilmType, fiducials: Boolean, corners: FloatArray): Bitmap {
-        val chart = FilmModel.defaults(type).simulated(TestChart.render(500, type, fiducials))
+    /** The content square alone, as older prints had it (the ring around it changes nothing for the grid). */
+    private fun photo(type: FilmType, corners: FloatArray): Bitmap {
+        val chart = FilmModel.defaults(type).simulated(TestChart.renderContent(500, type))
         val print = Bitmap.createBitmap(640, 760, Bitmap.Config.ARGB_8888)
         Canvas(print).apply {
             drawColor(Color.rgb(236, 236, 232))
@@ -44,22 +45,30 @@ class ChartDetectTest {
     }
 
     @Test
-    fun `corner marks are found under perspective`() {
+    fun `the colour grid is found under perspective, with and without the ring`() {
         val wanted = floatArrayOf(210f, 250f, 790f, 230f, 820f, 900f, 180f, 880f)
-        for (type in FilmType.values()) {
-            val found = ChartReader.detectFromMarks(photo(type, true, wanted))
-            println("$type marks: ${found?.joinToString { "%.0f".format(it) }}")
-            check(found, wanted, 10f, "$type")
+        val found = ChartReader.detectCorners(photo(FilmType.COLOR, wanted), FilmType.COLOR)
+        check(found, wanted, 25f, "content only")
+        // The full chart: the content square sits at CONTENT_INSET inside the file.
+        val full = FilmModel.defaults(FilmType.COLOR).simulated(TestChart.render(640, FilmType.COLOR))
+        val print = Bitmap.createBitmap(800, 920, Bitmap.Config.ARGB_8888)
+        Canvas(print).apply { drawColor(Color.rgb(236, 236, 232)); drawBitmap(full, 80f, 80f, null) }
+        val out = Bitmap.createBitmap(1000, 1200, Bitmap.Config.ARGB_8888)
+        Canvas(out).apply {
+            drawColor(Color.rgb(60, 50, 40))
+            val m = Matrix(); m.setPolyToPoly(floatArrayOf(80f, 80f, 720f, 80f, 720f, 720f, 80f, 720f), 0, wanted, 0, 4)
+            drawBitmap(print, m, Paint(Paint.FILTER_BITMAP_FLAG))
         }
-    }
-
-    @Test
-    fun `a chart without marks is not mistaken for one`() {
-        val wanted = floatArrayOf(210f, 250f, 790f, 230f, 820f, 900f, 180f, 880f)
-        assertNull(ChartReader.detectFromMarks(photo(FilmType.COLOR, false, wanted)))
-        // The real photos predate the marks: the marks method finds nothing there either.
-        val photo = javaClass.getResourceAsStream("/chart-daylight.jpg")!!.use { BitmapFactory.decodeStream(it)!! }
-        assertNull(ChartReader.detectFromMarks(photo))
+        val foundFull = ChartReader.detectCorners(out, FilmType.COLOR)
+        assertNotNull(foundFull)
+        // Expected content corners: the file corners moved inwards by CONTENT_INSET.
+        val h = ChartReader.homography(wanted)
+        val i = TestChart.CONTENT_INSET.toDouble()
+        val expected = FloatArray(8)
+        for ((k, c) in listOf(i to i, 1 - i to i, 1 - i to 1 - i, i to 1 - i).withIndex()) { val p = ChartReader.map(h, c.first, c.second); expected[2 * k] = p[0].toFloat(); expected[2 * k + 1] = p[1].toFloat() }
+        check(foundFull, expected, 25f, "full chart")
+        // And the mono chart has no grid: nothing is proposed, the user taps.
+        assertNull(ChartReader.detectCorners(photo(FilmType.MONO, wanted), FilmType.MONO))
     }
 
     @Test

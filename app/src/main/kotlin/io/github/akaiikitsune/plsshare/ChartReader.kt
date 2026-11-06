@@ -96,21 +96,34 @@ object ChartReader {
         photo.getPixels(pixels, 0, width, 0, 0, width, height)
         val h = homography(corners)
 
-        // Paper white: the instax frame just outside the image (its side borders are only about 8 %
-        // of the image wide), on each side; sides that fall off the print are dropped.
+        // Paper white: the instax frame beyond the file's edge and its framing ring, on each side;
+        // sides that fall off the print, or on the ring's lines, are dropped (the brightest wins).
+        // In content coordinates the file's edge is at −0.14 / 1.14 and the frame runs about 0.1
+        // further out on the sides and top, more at the bottom.
+        val f0 = -(TestChart.CONTENT_INSET / TestChart.CONTENT).toDouble() // file 0 in content coordinates
+        val f1 = 1 - f0
         val outside = listOf(
+            average(pixels, width, height, h, 0.3, f0 - 0.085, 0.7, f0 - 0.03, 5),
+            average(pixels, width, height, h, 0.3, f1 + 0.03, 0.7, f1 + 0.085, 5),
+            average(pixels, width, height, h, f0 - 0.085, 0.3, f0 - 0.03, 0.7, 5),
+            average(pixels, width, height, h, f1 + 0.03, 0.3, f1 + 0.085, 0.7, 5),
+            // Older prints without the ring: the frame right outside the content.
             average(pixels, width, height, h, 0.3, -0.055, 0.7, -0.015, 5),
             average(pixels, width, height, h, 0.3, 1.015, 0.7, 1.055, 5),
             average(pixels, width, height, h, -0.055, 0.3, -0.015, 0.7, 5),
             average(pixels, width, height, h, 1.015, 0.3, 1.055, 0.7, 5),
         )
+        // Paper is bright and, even under a warm light, less coloured than a wooden or woven table.
         val brightest = outside.maxOf { it.sum() }
-        val valid = outside.map { if (it.sum() >= brightest * 0.8f) it else null }
+        fun chroma(v: FloatArray) = (v.max() - v.min()) / v.sum().coerceAtLeast(1f)
+        val bright = outside.filter { it.sum() >= brightest * 0.8f }
+        val leastChroma = bright.minOf { chroma(it) }
+        val valid = outside.map { if (it.sum() >= brightest * 0.8f && chroma(it) <= leastChroma * 1.4f + 0.02f) it else null }
         val paper = FloatArray(3) { c -> valid.filterNotNull().map { it[c] }.sorted().let { v -> v[v.size / 2] } }
         // Uneven light (a window on one side, a flash fall-off) shows as a gradient across the frame:
         // model the paper white as varying linearly between opposite sides, per channel, so every
         // patch is divided by the white of its own neighbourhood.
-        val top = valid[0]; val bottom = valid[1]; val left = valid[2]; val right = valid[3]
+        val top = valid[0] ?: valid[4]; val bottom = valid[1] ?: valid[5]; val left = valid[2] ?: valid[6]; val right = valid[3] ?: valid[7]
         fun lerp(a: FloatArray?, b: FloatArray?, t: Double, c: Int): Float = when {
             a != null && b != null -> (a[c] + (b[c] - a[c]) * t.toFloat())
             a != null -> a[c]
@@ -190,11 +203,11 @@ object ChartReader {
     }
 
     /**
-     * Find the image area of the printed chart in a photo, without any tap: on the colour chart
-     * from its grid of patches ([detectFromGrid]), otherwise from the corner marks ([detectFromMarks]).
+     * Find the chart's content square in a photo, without any tap: on the colour chart from its
+     * grid of patches ([detectFromGrid]). The monochrome chart has no grid; its corners are tapped.
      */
     fun detectCorners(photo: Bitmap, type: FilmType): FloatArray? =
-        (if (type.monochrome) null else runCatching { detectFromGrid(photo) }.getOrNull()) ?: detectFromMarks(photo)
+        if (type.monochrome) null else runCatching { detectFromGrid(photo) }.getOrNull()
 
     // ------------------------------------------------------------ Detection from the colour grid
 
@@ -553,120 +566,6 @@ object ChartReader {
             .minByOrNull { Math.hypot((it[0] - x).toDouble(), (it[1] - y).toDouble()) } ?: return null
         val d = Math.hypot((best[0] - x).toDouble(), (best[1] - y).toDouble())
         return if (d < best[2] * 0.9) floatArrayOf(best[0], best[1]) else null
-    }
-
-    // ------------------------------------------------------------ Detection from the corner marks
-
-    /**
-     * Find the image area from the four corner marks.
-     *
-     * The print is the bright region; everything dark that it encloses (the grey steps, the
-     * patches, the gradient, the corner marks) forms "holes" in it. The extreme hole pixels in the
-     * four diagonal directions are the outer corners of the corner marks, printed a little inside
-     * the image area (the frame hides its very edge); their known positions align the whole chart.
-     * Returns null when no convincing chart is found there (a chart printed before the marks
-     * existed, a dark object on the table, glare): the user then taps the corners.
-     */
-    fun detectFromMarks(photo: Bitmap): FloatArray? {
-        val scale = maxOf(1, maxOf(photo.width, photo.height) / 500)
-        val w = photo.width / scale
-        val h = photo.height / scale
-        if (w < 40 || h < 40) return null
-        val full = IntArray(photo.width * photo.height)
-        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
-        val luma = IntArray(w * h)
-        for (y in 0 until h) for (x in 0 until w) {
-            val c = full[(y * scale + scale / 2) * photo.width + x * scale + scale / 2]
-            luma[y * w + x] = (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000
-        }
-        // Paper white: the 95th percentile of brightness.
-        val hist = IntArray(256)
-        for (v in luma) hist[v]++
-        var acc = 0; var paper = 255
-        for (v in 0..255) { acc += hist[v]; if (acc >= luma.size * 0.95) { paper = v; break } }
-        val bright = BooleanArray(w * h) { luma[it] > paper * 0.5f }
-        // Flood from the borders over the non-bright pixels: that is the outside (table, shadows).
-        val outside = BooleanArray(w * h)
-        val queue = IntArray(w * h)
-        var head = 0; var tail = 0
-        fun push(i: Int) { if (!bright[i] && !outside[i]) { outside[i] = true; queue[tail++] = i } }
-        for (x in 0 until w) { push(x); push((h - 1) * w + x) }
-        for (y in 0 until h) { push(y * w); push(y * w + w - 1) }
-        while (head < tail) {
-            val i = queue[head++]
-            val x = i % w; val y = i / w
-            if (x > 0) push(i - 1); if (x < w - 1) push(i + 1); if (y > 0) push(i - w); if (y < h - 1) push(i + w)
-        }
-        // Holes: dark pixels enclosed by the print, in components big enough not to be dust.
-        val label = IntArray(w * h)
-        var next = 0
-        val sizes = ArrayList<Int>()
-        for (start in 0 until w * h) {
-            if (bright[start] || outside[start] || label[start] != 0) continue
-            next++
-            label[start] = next
-            head = 0; tail = 0; queue[tail++] = start
-            var count = 0
-            while (head < tail) {
-                val i = queue[head++]; count++
-                val x = i % w; val y = i / w
-                for (j in intArrayOf(if (x > 0) i - 1 else -1, if (x < w - 1) i + 1 else -1, if (y > 0) i - w else -1, if (y < h - 1) i + w else -1)) {
-                    if (j >= 0 && !bright[j] && !outside[j] && label[j] == 0) { label[j] = next; queue[tail++] = j }
-                }
-            }
-            sizes += count
-        }
-        // Dust is a few pixels at this scale; the corner marks are small too, so the bar is low.
-        val minSize = maxOf(4, w * h / 40000)
-        var tl = -1; var tr = -1; var br = -1; var bl = -1
-        var sTl = Int.MAX_VALUE; var sTr = Int.MIN_VALUE; var sBr = Int.MIN_VALUE; var sBl = Int.MAX_VALUE
-        for (i in 0 until w * h) {
-            val l = label[i]
-            if (l == 0 || sizes[l - 1] < minSize) continue
-            val x = i % w; val y = i / w
-            if (x + y < sTl) { sTl = x + y; tl = i }
-            if (x - y > sTr) { sTr = x - y; tr = i }
-            if (x + y > sBr) { sBr = x + y; br = i }
-            if (x - y < sBl) { sBl = x - y; bl = i }
-        }
-        if (tl < 0) return null
-        fun pt(i: Int, dx: Float, dy: Float) = floatArrayOf(((i % w) + dx) * scale, ((i / w) + dy) * scale)
-        // Outer corners of the extreme pixels.
-        val quad = floatArrayOf(
-            pt(tl, 0f, 0f)[0], pt(tl, 0f, 0f)[1], pt(tr, 1f, 0f)[0], pt(tr, 1f, 0f)[1],
-            pt(br, 1f, 1f)[0], pt(br, 1f, 1f)[1], pt(bl, 0f, 1f)[0], pt(bl, 0f, 1f)[1],
-        )
-        val side = minOf(w, h) * scale
-        for (k in 0 until 4) {
-            val n = (k + 1) % 4
-            val len = Math.hypot((quad[2 * n] - quad[2 * k]).toDouble(), (quad[2 * n + 1] - quad[2 * k + 1]).toDouble())
-            if (len < side * 0.15) return null
-        }
-        // The quad joins the outer corners of the four marks, which sit at known positions inside
-        // the image area: the homography from those positions gives the whole chart's alignment.
-        val k = TestChart.FIDUCIAL_INSET.toDouble()
-        val known = doubleArrayOf(k, k, 1 - k, k, 1 - k, 1 - k, k, 1 - k)
-        val hk = homographyFrom(known, quad)
-        fun lumaAt(x: Double, y: Double): Float {
-            val p = map(hk, x, y)
-            val c = sample(full, photo.width, photo.height, p[0], p[1])
-            return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f / paper
-        }
-        // Validation: the four marks read dark, and the grey steps run from dark to light in order,
-        // which a dark object on the table or a chart printed without marks will not satisfy.
-        val fc = (TestChart.FIDUCIAL_INSET + TestChart.FIDUCIAL / 2).toDouble()
-        val marks = listOf(fc to fc, 1 - fc to fc, 1 - fc to 1 - fc, fc to 1 - fc).count { (x, y) -> lumaAt(x, y) < 0.5f }
-        if (marks != 4) return null
-        val stepW = 0.92 / 11
-        val steps = (0 until 11).map { i -> lumaAt(0.04 + (i + 0.5) * stepW, 0.11) }
-        if (steps[0] > 0.45f || steps[10] < 0.8f) return null
-        for (i in 1 until 11) if (steps[i] < steps[i - 1] - 0.04f) return null
-        val corners = FloatArray(8)
-        for ((idx, c) in listOf(0.0 to 0.0, 1.0 to 0.0, 1.0 to 1.0, 0.0 to 1.0).withIndex()) {
-            val p = map(hk, c.first, c.second)
-            corners[2 * idx] = p[0].toFloat(); corners[2 * idx + 1] = p[1].toFloat()
-        }
-        return corners
     }
 
     /** Solve the homography that maps four source points (x0,y0,…) to four destination points. */

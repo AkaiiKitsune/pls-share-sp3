@@ -924,8 +924,6 @@ class MainActivity : Activity() {
         root.addView(geometryReadout)
         ui.space(root, 6)
         // The frame's cuts, read on the framing chart, in halves of a percent.
-        root.addView(ui.softButton(s.printFraming) { printFraming() }.apply { tooltipText = s.printFramingTip }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
-        ui.space(root, 8)
         root.addView(ui.text(s.geometryCutsHint, 12f, alpha = 0.7f))
         ui.space(root, 6)
         fun cutSlider(label: String, read: () -> Float, write: (Float) -> Unit) {
@@ -2026,23 +2024,6 @@ class MainActivity : Activity() {
 
     private val geometryBars = ArrayList<Pair<SeekBar, () -> Int>>()
 
-    private fun printFraming() {
-        if (connected == null) return message(s.notConnectedYet)
-        if (printing.get()) return message(s.busy)
-        val film = connected?.filmRemaining ?: 0
-        if (film == 0) return message(s.noFilm)
-        AlertDialog.Builder(this)
-            .setMessage(s.printFramingConfirm.format(film))
-            .setNegativeButton(s.cancel, null)
-            .setPositiveButton(s.printFraming) { _, _ ->
-                // Printed raw: no compensation, no pre-warp, so the chart shows the printer as it is.
-                val file = Jobs.save(Jobs.queueDir(this), TestChart.renderFraming(PREVIEW_SIZE))
-                show(homeView)
-                startPrinting(listOf(file), archive = false)
-                toast(s.printChartStarted)
-            }
-            .show()
-    }
 
     private fun setFilmType(type: FilmType) {
         if (type == filmType) return
