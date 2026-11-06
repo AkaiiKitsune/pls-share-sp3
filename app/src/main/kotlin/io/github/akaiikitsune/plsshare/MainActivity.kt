@@ -953,6 +953,7 @@ class MainActivity : Activity() {
         photoDate = null
         editState.reset()
         editState.photoDate = null
+        undoStack.clear(); redoStack.clear()
         refreshPreview()
         updateButtons()
         message("")
@@ -1061,6 +1062,7 @@ class MainActivity : Activity() {
                     photo = it
                     editorPhoto = Photos.scaledForEditing(it, EDITOR_SOURCE_SIDE)
                     editState.reset()
+                    undoStack.clear(); redoStack.clear()
                     refreshPreview()
                     updateButtons()
                 }.onFailure { message(s.photoError.format(it.message ?: it.javaClass.simpleName)) }
@@ -1729,7 +1731,8 @@ class MainActivity : Activity() {
         editorView.state.copyFrom(editState)
         editorView.state.photoDate = photoDate
         editorView.selectedOverlay = null
-        undoStack.clear(); redoStack.clear(); syncUndoButtons()
+        // The undo history survives leaving the editor; it is only reset for a new photo.
+        syncUndoButtons()
         buildThumbnails(bitmap)
         syncSliders()
         syncPresets()
