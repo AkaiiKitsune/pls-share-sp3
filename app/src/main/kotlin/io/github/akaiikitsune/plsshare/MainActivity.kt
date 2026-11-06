@@ -926,9 +926,11 @@ class MainActivity : Activity() {
         // The frame's cuts, read on the framing chart, in halves of a percent.
         root.addView(ui.text(s.geometryCutsHint, 12f, alpha = 0.7f))
         ui.space(root, 6)
-        fun cutSlider(label: String, read: () -> Float, write: (Float) -> Unit) {
+        // A slider over the geometry: [steps] positions from [low] in steps of [step], shown with [format].
+        fun geometrySlider(label: String, low: Float, step: Float, steps: Int, format: (Float) -> String, read: () -> Float, write: (Float) -> Unit) {
             val value = ui.text("", 13f, alpha = 0.7f).apply { gravity = Gravity.END }
-            fun show(v: Float) { value.text = "%.1f %%".format(v * 100f) }
+            fun show(v: Float) { value.text = format(v) }
+            fun position() = Math.round((read() - low) / step).coerceIn(0, steps)
             show(read())
             val header = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -937,11 +939,11 @@ class MainActivity : Activity() {
             }
             root.addView(header)
             val bar = SeekBar(this).apply {
-                max = 24
-                progress = Math.round(read() * 200f)
+                max = steps
+                progress = position()
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                        val v = progress / 200f
+                        val v = low + progress * step
                         show(v)
                         if (fromUser) { write(v); geometry.save(prefs); applyGeometry(); refreshPreview() }
                     }
@@ -949,13 +951,20 @@ class MainActivity : Activity() {
                     override fun onStopTrackingTouch(seekBar: SeekBar) {}
                 })
             }
-            geometryBars += bar to { Math.round(read() * 200f) }
+            geometryBars += bar to ::position
             root.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
         }
+        fun cutSlider(label: String, read: () -> Float, write: (Float) -> Unit) =
+            geometrySlider(label, 0f, 0.005f, 24, { "%.1f %%".format(it * 100f) }, read, write)
         cutSlider(s.geometryCutTop, { geometry.cutTop }) { geometry.cutTop = it }
         cutSlider(s.geometryCutBottom, { geometry.cutBottom }) { geometry.cutBottom = it }
         cutSlider(s.geometryCutLeft, { geometry.cutLeft }) { geometry.cutLeft = it }
         cutSlider(s.geometryCutRight, { geometry.cutRight }) { geometry.cutRight = it }
+        ui.space(root, 6)
+        // Rotation by hand, on top of the measured one: ±3° in tenths.
+        root.addView(ui.text(s.geometryRotationHint, 12f, alpha = 0.7f))
+        ui.space(root, 6)
+        geometrySlider(s.geometryRotation, -3f, 0.1f, 60, { "%+.1f°".format(it) }, { geometry.rotationTrim }) { geometry.rotationTrim = if (Math.abs(it) < 0.05f) 0f else it }
         ui.space(root, 6)
         geometryToggle = ui.softButton(s.geometryCompensate) {
             geometry.compensate = !geometry.compensate
@@ -1135,7 +1144,7 @@ class MainActivity : Activity() {
         o.put("geometry", org.json.JSONObject().put("stepTop", geometry.stepTop.toDouble()).put("gradientBottom", geometry.gradientBottom.toDouble())
             .put("stepLeft", geometry.stepLeft.toDouble()).put("patchRight", geometry.patchRight.toDouble()).put("compensate", geometry.compensate)
             .put("cutTop", geometry.cutTop.toDouble()).put("cutBottom", geometry.cutBottom.toDouble()).put("cutLeft", geometry.cutLeft.toDouble()).put("cutRight", geometry.cutRight.toDouble())
-            .put("card", geometry.card?.let { PrinterGeometry.cardText(it) } ?: ""))
+            .put("card", geometry.card?.let { PrinterGeometry.cardText(it) } ?: "").put("rotationTrim", geometry.rotationTrim.toDouble()))
         o.put("filmType", filmType.key)
         return o
     }
@@ -1186,6 +1195,7 @@ class MainActivity : Activity() {
                     geometry.cutTop = g.optDouble("cutTop", geometry.cutTop.toDouble()).toFloat(); geometry.cutBottom = g.optDouble("cutBottom", geometry.cutBottom.toDouble()).toFloat()
                     geometry.cutLeft = g.optDouble("cutLeft", geometry.cutLeft.toDouble()).toFloat(); geometry.cutRight = g.optDouble("cutRight", geometry.cutRight.toDouble()).toFloat()
                     if (g.has("card")) geometry.card = g.optString("card", "").takeIf { it.isNotEmpty() }?.let { PrinterGeometry.parseCard(it) }
+                    geometry.rotationTrim = g.optDouble("rotationTrim", geometry.rotationTrim.toDouble()).toFloat()
                     geometry.save(prefs)
                 }
                 film = FilmModel.load(prefs, filmType)

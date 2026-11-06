@@ -39,6 +39,8 @@ class PrinterGeometry(
     var cutRight: Float = 0f,
     /** The card's corners (top-left, top-right, bottom-right, bottom-left) in file coordinates, or null. */
     var card: FloatArray? = null,
+    /** Rotation entered by hand, in degrees clockwise, on top of the measured one (as if the printer turned the file that much more). */
+    var rotationTrim: Float = 0f,
 ) {
     companion object {
         /** File positions of the chart's reference lines (content positions through [TestChart.contentToFile]). */
@@ -61,6 +63,7 @@ class PrinterGeometry(
             prefs.getFloat(PREFIX + "cutTop", 0f), prefs.getFloat(PREFIX + "cutBottom", 0f),
             prefs.getFloat(PREFIX + "cutLeft", 0f), prefs.getFloat(PREFIX + "cutRight", 0f),
             prefs.getString(PREFIX + "card", null)?.let { parseCard(it) },
+            prefs.getFloat(PREFIX + "rotationTrim", 0f),
         )
 
         fun parseCard(text: String): FloatArray? = runCatching {
@@ -77,6 +80,7 @@ class PrinterGeometry(
             .putBoolean(PREFIX + "compensate", compensate)
             .putFloat(PREFIX + "cutTop", cutTop).putFloat(PREFIX + "cutBottom", cutBottom).putFloat(PREFIX + "cutLeft", cutLeft).putFloat(PREFIX + "cutRight", cutRight)
             .putString(PREFIX + "card", card?.let { cardText(it) })
+            .putFloat(PREFIX + "rotationTrim", rotationTrim)
             .apply()
     }
 
@@ -84,6 +88,7 @@ class PrinterGeometry(
         stepTop = STEP_TOP_FILE; gradientBottom = GRADIENT_BOTTOM_FILE; stepLeft = STEP_LEFT_FILE; patchRight = PATCH_RIGHT_FILE
         cutTop = 0f; cutBottom = 0f; cutLeft = 0f; cutRight = 0f
         card = null
+        rotationTrim = 0f
     }
 
     /** Whether the frame's cuts were entered. */
@@ -104,8 +109,8 @@ class PrinterGeometry(
     val linesMeasured: Boolean get() = Math.abs(stepTop - STEP_TOP_FILE) > 1e-4f || Math.abs(gradientBottom - GRADIENT_BOTTOM_FILE) > 1e-4f ||
         Math.abs(stepLeft - STEP_LEFT_FILE) > 1e-4f || Math.abs(patchRight - PATCH_RIGHT_FILE) > 1e-4f
 
-    /** Whether anything was measured. */
-    val measured: Boolean get() = linesMeasured || card != null
+    /** Whether anything was measured or entered that changes prints. */
+    val measured: Boolean get() = linesMeasured || card != null || rotationTrim != 0f
 
     /** Vertical scale of the print relative to the file (1.03 = 3 % taller). */
     val stretch: Float get() = (gradientBottom - stepTop) / (GRADIENT_BOTTOM_FILE - STEP_TOP_FILE)
@@ -228,6 +233,9 @@ class PrinterGeometry(
             val y0 = y.toInt().coerceIn(0, h - 1); val y1 = (y0 + 1).coerceAtMost(h - 1); val ty = ((y - y0) * 256).toInt().coerceIn(0, 256)
             return lerp(lerp(src[y0 * w + x0], src[y0 * w + x1], tx), lerp(src[y1 * w + x0], src[y1 * w + x1], tx), ty)
         }
+        // The hand-entered rotation: the file is taken to land that much further clockwise.
+        val trim = Math.toRadians(rotationTrim.toDouble())
+        val cosT = Math.cos(trim); val sinT = Math.sin(trim)
         val target = if (placed) targetMm else null
         val m = cardMap
         if (target != null && m != null) {
@@ -237,15 +245,20 @@ class PrinterGeometry(
                 val o = f * w
                 for (c in 0 until w) {
                     val p = ChartReader.map(m, toPrintX(c / (w - 1f)).toDouble(), fy)
-                    val u = ((p[0] - cx) / side + 0.5).toFloat(); val v = ((p[1] - cy) / side + 0.5).toFloat()
+                    val dx = p[0] - cx; val dy = p[1] - cy
+                    val u = ((cosT * dx - sinT * dy) / side + 0.5).toFloat(); val v = ((sinT * dx + cosT * dy) / side + 0.5).toFloat()
                     out[o + c] = bilinear(u * (w - 1), v * (h - 1))
                 }
             }
         } else {
             for (f in 0 until h) {
-                val py = toPrint(f / (h - 1f)) * (h - 1)
+                val fy = f / (h - 1.0) - 0.5
                 val o = f * w
-                for (c in 0 until w) out[o + c] = bilinear(toPrintX(c / (w - 1f)) * (w - 1), py)
+                for (c in 0 until w) {
+                    val fx = c / (w - 1.0) - 0.5
+                    val rx = (cosT * fx - sinT * fy + 0.5).toFloat(); val ry = (sinT * fx + cosT * fy + 0.5).toFloat()
+                    out[o + c] = bilinear(toPrintX(rx) * (w - 1), toPrint(ry) * (h - 1))
+                }
             }
         }
         return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { setPixels(out, 0, w, 0, 0, w, h) }

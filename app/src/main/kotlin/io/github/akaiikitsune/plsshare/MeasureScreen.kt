@@ -44,6 +44,7 @@ internal fun describeGeometry(s: Strings, g: PrinterGeometry): String {
     lines += if (g.cutsKnown) s.geometryCuts.format(g.cutTop * 100f, g.cutBottom * 100f, g.cutLeft * 100f, g.cutRight * 100f) else s.geometryCutsNone
     val target = g.targetMm
     if (target != null) lines += if (g.placed) s.geometryPlaced.format(target[2]) else s.geometryNotPlaced.format(target[2])
+    if (g.rotationTrim != 0f) lines += s.geometryTrim.format(g.rotationTrim)
     return lines.joinToString("\n")
 }
 
