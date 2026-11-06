@@ -131,6 +131,7 @@ class MainActivity : Activity() {
     private lateinit var measureColourReport: TextView
     private lateinit var measureColourCompare: ImageView
     private lateinit var hueReadout: TextView
+    private lateinit var measureStatusView: TextView
     private var measuredFilm: FilmModel? = null
     private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
@@ -699,16 +700,18 @@ class MainActivity : Activity() {
             val uri = shootUri ?: prefs.getString(PREF_SHOOT, null)?.let { Uri.parse(it) }
             shootUri = null
             prefs.edit().remove(PREF_SHOOT).apply()
-            journal("chart photo: result $resultCode, uri $uri")
-            if (uri != null) {
-                if (resultCode == RESULT_OK) {
-                    runCatching { contentResolver.update(uri, android.content.ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null) }
-                        .onFailure { journal("chart photo: could not publish the entry: $it") }
-                    show(measureView)
-                    loadChartPhoto(uri)
-                } else {
-                    runCatching { contentResolver.delete(uri, null, null) }
-                }
+            val file = uri?.let { CaptureProvider.fileFor(this, it) }
+            journal("chart photo: result $resultCode, uri $uri, file ${file?.length() ?: -1} bytes")
+            show(measureView)
+            if (file == null) {
+                if (resultCode == RESULT_OK) measureStatus(s.measureFailed.format("no capture file"))
+            } else if (resultCode == RESULT_OK && file.length() > 0) {
+                loadChartPhoto(uri)
+            } else if (resultCode == RESULT_OK) {
+                measureStatus(s.measureFailed.format(s.measureEmptyCapture))
+                file.delete()
+            } else {
+                file.delete()
             }
         }
         if (requestCode == REQUEST_PICK_MANY && resultCode == RESULT_OK && data != null) {
@@ -944,7 +947,10 @@ class MainActivity : Activity() {
         val pick = ui.softButton(s.measurePick) { pickChartPhoto() }
         val shoot = ui.softButton(s.measureShoot) { shootChartPhoto() }
         root.addView(ui.row(pick, shoot), LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 12)
+        ui.space(root, 8)
+        measureStatusView = ui.text("", 13f, color = Ui.accent(this)).apply { visibility = View.GONE }
+        root.addView(measureStatusView)
+        ui.space(root, 4)
         cornerPick = CornerPickView(this).apply {
             background = ui.rounded(Ui.CARD, 12)
             clipToOutline = true
@@ -1025,28 +1031,36 @@ class MainActivity : Activity() {
     }
 
     /** Take the photo with the camera app, straight into the gallery (a pending MediaStore entry, no file provider needed). */
+    /**
+     * Take the photo with the camera app, into a private cache file served by [CaptureProvider].
+     * The write grant only covers the URIs in the intent's clip data, not the output extra, so the
+     * URI goes in both.
+     */
     private fun shootChartPhoto() {
-        val values = android.content.ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "instax-chart-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".jpg")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.IS_PENDING, 1)
-        }
-        val uri = try {
-            contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        } catch (e: Exception) { null } ?: return message(s.measureFailed.format("MediaStore"))
+        val (file, uri) = CaptureProvider.newCapture(this)
         shootUri = uri
         prefs.edit().putString(PREF_SHOOT, uri.toString()).apply()
         val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
             .putExtra(MediaStore.EXTRA_OUTPUT, uri)
             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.clipData = ClipData.newRawUri("chart", uri)
+        measureStatus("")
         try {
             startActivityForResult(intent, REQUEST_SHOOT_CHART)
+            journal("chart photo: camera started for $uri")
         } catch (e: Exception) {
             shootUri = null
             prefs.edit().remove(PREF_SHOOT).apply()
-            contentResolver.delete(uri, null, null)
-            message(s.measureFailed.format(e.message ?: e.javaClass.simpleName))
+            file.delete()
+            measureStatus(s.measureFailed.format(e.message ?: e.javaClass.simpleName))
         }
+    }
+
+    /** A line under the photo buttons of the measurement screen, for what went wrong. */
+    private fun measureStatus(text: String) {
+        measureStatusView.text = text
+        measureStatusView.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
+        if (text.isNotBlank()) journal(text)
     }
 
     private fun loadChartPhoto(uri: Uri) {
@@ -1059,7 +1073,9 @@ class MainActivity : Activity() {
                     cornerPick.bitmap = it
                     hideMeasureResult()
                     syncMeasureButtons()
-                }.onFailure { message(s.photoError.format(it.message ?: "")) }
+                    measureStatus("")
+                    journal("chart photo: loaded ${it.width}x${it.height}")
+                }.onFailure { measureStatus(s.photoError.format(it.message ?: it.javaClass.simpleName)) }
             }
         }.start()
     }

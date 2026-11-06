@@ -164,19 +164,31 @@ class FilmModel(
     fun resetHues() { hueShift.fill(0f); hueGain.fill(1f); hueValue.fill(1f) }
 
     /** The brightness factor of a colour of saturation [s] at hue [h]: 1 for neutrals, the sector's value gain when fully saturated. */
-    private fun valueFactor(h: Float, s: Float): Float = 1f - (1f - sectorValue(hueValue, h)) * s
+    private fun valueFactor(h: Float, s: Float): Float = 1f - (1f - sectorValue(hueValue, h)) * s * hueWeight(s)
 
     /**
-     * The input hue that the shift table maps onto [hOut]. The shifted hue is piecewise linear in
-     * the input hue, so each sector is solved exactly; when several sectors answer (a steep table),
-     * the one nearest to [hOut] wins.
+     * How much of the hue and saturation correction applies at saturation [s]: nothing on neutrals
+     * and near-neutrals (a blown highlight with a trace of colour must not turn lavender), all of
+     * it from 20 % saturation on, with a smooth ramp in between.
      */
-    fun inverseHue(hOut: Float): Float {
+    private fun hueWeight(s: Float): Float {
+        val t = ((s - 0.03f) / 0.17f).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    private fun gainAt(h: Float, w: Float): Float = 1f + (sectorValue(hueGain, h) - 1f) * w
+
+    /**
+     * The input hue that the shift table, scaled by [w], maps onto [hOut]. The shifted hue is
+     * piecewise linear in the input hue, so each sector is solved exactly; when several sectors
+     * answer (a steep table), the one nearest to [hOut] wins.
+     */
+    fun inverseHue(hOut: Float, w: Float = 1f): Float {
         var best = hOut
         var bestDist = Float.MAX_VALUE
         for (i in 0 until HUES) {
-            val a = hueShift[i]
-            val b = hueShift[(i + 1) % HUES]
+            val a = hueShift[i] * w
+            val b = hueShift[(i + 1) % HUES] * w
             val slope = (b - a) / 60f
             if (1f + slope <= 0.05f) continue
             for (wrap in -1..1) {
@@ -194,8 +206,10 @@ class FilmModel(
     /**
      * Per-hue correction on the input colours (before the global colour matrix): rotate each hue by
      * the sector's shift, scale its saturation by the sector's gain, and scale its brightness by the
-     * sector's value gain in proportion to the saturation. The inverse solves the hue exactly and
-     * divides the saturation and brightness back; what the film cannot reach is clamped.
+     * sector's value gain in proportion to the saturation, the whole fading in with saturation.
+     * The inverse solves the hue exactly for the weight of the input saturation (found by a few
+     * fixed-point steps) and divides the saturation and brightness back; what the film cannot
+     * reach is clamped.
      */
     fun hueCorrect(pixels: IntArray, inverse: Boolean) {
         if (type.monochrome || !hueCorrected) return
@@ -203,18 +217,26 @@ class FilmModel(
         for (i in pixels.indices) {
             val p = pixels[i]
             rgbToHsv((p shr 16) and 0xFF, (p shr 8) and 0xFF, p and 0xFF, hsv)
-            if (hsv[1] < 0.02f) continue
+            if (hsv[1] < 0.03f) continue
             val h: Float
             val s: Float
             val v: Float
             if (!inverse) {
-                h = hsv[0] + sectorValue(hueShift, hsv[0])
-                s = hsv[1] * sectorValue(hueGain, hsv[0])
+                val w = hueWeight(hsv[1])
+                h = hsv[0] + sectorValue(hueShift, hsv[0]) * w
+                s = hsv[1] * gainAt(hsv[0], w)
                 v = hsv[2] * valueFactor(hsv[0], hsv[1])
             } else {
-                h = inverseHue(hsv[0])
-                s = hsv[1] / sectorValue(hueGain, h).coerceAtLeast(0.2f)
-                v = hsv[2] / valueFactor(h, s.coerceIn(0f, 1f)).coerceAtLeast(0.2f)
+                var sin = hsv[1]
+                var hin = hsv[0]
+                repeat(5) {
+                    val w = hueWeight(sin)
+                    hin = inverseHue(hsv[0], w)
+                    sin = (hsv[1] / gainAt(hin, w).coerceAtLeast(0.2f)).coerceIn(0f, 1f)
+                }
+                h = hin
+                s = sin
+                v = hsv[2] / valueFactor(h, s).coerceAtLeast(0.2f)
             }
             pixels[i] = (p and 0xFF000000.toInt()) or (hsvToRgb(h, s.coerceIn(0f, 1f), v.coerceIn(0f, 1f)) and 0xFFFFFF)
         }

@@ -44,6 +44,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Hands one private cache file to the camera app for a photo of the test chart. -->
+        <provider
+            android:name=".CaptureProvider"
+            android:authorities="io.github.akaiikitsune.plsshare.capture"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <service
             android:name=".PrintService"
             android:exported="false"

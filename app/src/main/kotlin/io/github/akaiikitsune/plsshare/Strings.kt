@@ -226,6 +226,7 @@ class Strings private constructor(private val fr: Boolean) {
     val measureApply get() = t("Appliquer ces valeurs", "Apply these values")
     val measureApplied get() = t("Calibration mesurée appliquée.", "Measured calibration applied.")
     val measureFailed get() = t("Mesure impossible : %s", "Could not measure: %s")
+    val measureEmptyCapture get() = t("l'appareil photo n'a rien enregistré", "the camera app saved nothing")
     val calPrintSharpness get() = t("Netteté ajoutée à l'impression (le film adoucit)", "Sharpening added at print time (the film softens)")
     val ratio get() = t("Format de la photo", "Photo ratio")
     val ratioSquare get() = "1:1"

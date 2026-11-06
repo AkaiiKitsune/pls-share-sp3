@@ -93,12 +93,25 @@ class ChartReaderTest {
     }
 
     @Test
+    fun `near-neutral highlights are left alone by the hue correction`() {
+        val m = FilmModel.defaults(FilmType.COLOR).apply { hueShift[3] = 20f; hueGain[3] = 1.8f; hueShift[4] = -30f; hueGain[4] = 1.5f; hueValue[4] = 0.6f }
+        // A blown highlight with a trace of blue (saturation 2 to 4 %) must stay where it is.
+        for (src in listOf(android.graphics.Color.rgb(255, 255, 250), android.graphics.Color.rgb(250, 250, 255), android.graphics.Color.rgb(245, 248, 255), android.graphics.Color.rgb(255, 252, 245))) {
+            val px = intArrayOf(src)
+            m.hueCorrect(px, inverse = false)
+            val d = maxOf(Math.abs(android.graphics.Color.red(px[0]) - android.graphics.Color.red(src)), Math.abs(android.graphics.Color.green(px[0]) - android.graphics.Color.green(src)), Math.abs(android.graphics.Color.blue(px[0]) - android.graphics.Color.blue(src)))
+            assertTrue("highlight ${Integer.toHexString(src)} moved by $d", d <= 2)
+        }
+    }
+
+    @Test
     fun `compensation undoes the hue correction`() {
         val m = FilmModel.defaults(FilmType.COLOR).apply {
             hueShift[0] = 12f; hueGain[0] = 0.8f; hueShift[3] = -25f; hueGain[3] = 1.1f; hueShift[4] = 8f; hueGain[4] = 1.3f
             hueValue[2] = 0.5f; hueValue[4] = 0.8f
         }
-        for (src in TestChart.patches) {
+        val extra = listOf(android.graphics.Color.rgb(250, 250, 255), android.graphics.Color.rgb(240, 236, 230), android.graphics.Color.rgb(200, 210, 220), android.graphics.Color.rgb(120, 140, 130))
+        for (src in TestChart.patches + extra) {
             val px = intArrayOf(src)
             m.hueCorrect(px, inverse = true)
             m.hueCorrect(px, inverse = false)
