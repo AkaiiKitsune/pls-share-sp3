@@ -58,6 +58,8 @@ class MeasureScreen(private val activity: MainActivity) {
         const val REQUEST_SHOOT_CHART = 12
         /** Longest side kept per chart photo: enough for 9×9 samples per patch, small enough for ten photos in memory. */
         private const val CHART_PHOTO_SIDE = 1600
+        /** Longest side of the photo reloaded for reading the ring and the card's edges, one photo at a time. */
+        private const val MEASURE_SIDE = 3200
         private const val PREF_SHOOT = "shootUri"
     }
 
@@ -72,8 +74,11 @@ class MeasureScreen(private val activity: MainActivity) {
      * centres of the four corner patches ([anchors]) and the image corners follow; on monochrome
      * film the corners are marked directly. [reading] is kept with the corners it was read with.
      */
-    class ChartPhoto(val bitmap: Bitmap, var corners: FloatArray?) {
+    class ChartPhoto(val bitmap: Bitmap, var corners: FloatArray?, val uri: Uri? = null) {
         var anchors: FloatArray? = corners?.let { ChartReader.anchorsFromCorners(it) }
+        /** The card's corners and the ring's cuts measured on this photo (file coordinates, percent), after a measurement. */
+        var card: FloatArray? = null
+        var ring: FloatArray? = null
         var reading: ChartReader.Reading? = null
         var readingCorners: FloatArray? = null
         val complete get() = corners != null
@@ -98,6 +103,8 @@ class MeasureScreen(private val activity: MainActivity) {
     private lateinit var measureResultBox: LinearLayout
     private lateinit var measureReport: TextView
     private lateinit var measureCompare: ImageView
+    private lateinit var measureCardReport: TextView
+    private lateinit var measureCardView: ImageView
     private lateinit var measureColourBox: LinearLayout
     private lateinit var measureColourReport: TextView
     private lateinit var measureColourCompare: ImageView
@@ -192,6 +199,19 @@ class MeasureScreen(private val activity: MainActivity) {
             clipToOutline = true
         }
         measureResultBox.addView(measureCompare, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        // The selected photo with what was found on it: the content square, the card's edges, the frame's window.
+        ui.space(measureResultBox, 12)
+        measureCardReport = ui.text("", 13f, alpha = 0.7f)
+        measureResultBox.addView(measureCardReport)
+        ui.space(measureResultBox, 8)
+        measureCardView = ImageView(activity).apply {
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = ui.rounded(Ui.CARD, 12)
+            clipToOutline = true
+            contentDescription = s.measureCardViewDescription
+        }
+        measureResultBox.addView(measureCardView, LinearLayout.LayoutParams(ui.match, ui.wrap))
         measureColourBox = ui.column()
         ui.space(measureColourBox, 12)
         measureColourReport = ui.text("", 13f, alpha = 0.7f)
@@ -339,6 +359,52 @@ class MeasureScreen(private val activity: MainActivity) {
         markPanel.visibility = View.VISIBLE
         syncMeasureButtons()
         updateRectified()
+        if (measureResultBox.visibility == View.VISIBLE) updateCardView()
+    }
+
+    /**
+     * The selected photo, reduced, with what the measurement found on it: the content square
+     * (accent), the card's edges (white) and the frame's window (yellow) when they were found.
+     */
+    private fun updateCardView() {
+        val entry = chartPhotos.getOrNull(chartCurrent)?.takeIf { it.complete } ?: run { measureCardView.visibility = View.GONE; return }
+        val full = Photos.scaledForEditing(entry.bitmap, 1200)
+        val k = full.width.toFloat() / entry.bitmap.width
+        val h = ChartReader.homography(FloatArray(8) { entry.corners!![it] * k })
+        fun photoQuad(file: FloatArray): FloatArray {
+            val out = FloatArray(8)
+            for (i in 0 until 4) {
+                val p = ChartReader.map(h, TestChart.fileToContent(file[2 * i]).toDouble(), TestChart.fileToContent(file[2 * i + 1]).toDouble())
+                out[2 * i] = p[0].toFloat(); out[2 * i + 1] = p[1].toFloat()
+            }
+            return out
+        }
+        val inset = TestChart.CONTENT_INSET; val far = 1f - inset
+        val content = photoQuad(floatArrayOf(inset, inset, far, inset, far, far, inset, far))
+        val card = entry.card?.let { photoQuad(it) }
+        val window = entry.card?.let { c -> measuredRing?.let { ring -> PrinterGeometry().apply { this.card = c; setCuts(ring) }.windowCornersFile()?.let { photoQuad(it) } } }
+        // Cropped around the card (or around the content, generously) so that the edges can be checked.
+        val around = card ?: content
+        var left = Float.MAX_VALUE; var top = Float.MAX_VALUE; var right = 0f; var bottom = 0f
+        for (i in 0 until 4) { left = minOf(left, around[2 * i]); right = maxOf(right, around[2 * i]); top = minOf(top, around[2 * i + 1]); bottom = maxOf(bottom, around[2 * i + 1]) }
+        val margin = (if (card != null) 0.12f else 0.5f) * maxOf(right - left, bottom - top)
+        val x0 = (left - margin).toInt().coerceIn(0, full.width - 1); val y0 = (top - margin).toInt().coerceIn(0, full.height - 1)
+        val x1 = (right + margin).toInt().coerceIn(x0 + 1, full.width); val y1 = (bottom + margin).toInt().coerceIn(y0 + 1, full.height)
+        val bitmap = Bitmap.createBitmap(full, x0, y0, x1 - x0, y1 - y0).copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = maxOf(2f, bitmap.width / 300f) }
+        fun quad(q: FloatArray, colour: Int) {
+            paint.color = colour
+            val path = android.graphics.Path()
+            for (i in 0 until 4) { if (i == 0) path.moveTo(q[0] - x0, q[1] - y0) else path.lineTo(q[2 * i] - x0, q[2 * i + 1] - y0) }
+            path.close()
+            canvas.drawPath(path, paint)
+        }
+        quad(content, ui.accent)
+        card?.let { quad(it, Color.MAGENTA) }
+        window?.let { quad(it, Color.YELLOW) }
+        measureCardView.setImageBitmap(bitmap)
+        measureCardView.visibility = View.VISIBLE
     }
 
     /** Selected: accent frame; without corners: dimmed, so the ones to fix stand out. */
@@ -349,8 +415,10 @@ class MeasureScreen(private val activity: MainActivity) {
         t.background = ui.rounded(if (selected) ui.accent else Ui.CARD, 12)
     }
 
-    fun addChartPhoto(bitmap: Bitmap, corners: FloatArray?, select: Boolean) {
-        val entry = ChartPhoto(bitmap, corners)
+    fun addChartPhoto(bitmap: Bitmap, corners: FloatArray?, select: Boolean) = addChartPhoto(bitmap, corners, select, null)
+
+    fun addChartPhoto(bitmap: Bitmap, corners: FloatArray?, select: Boolean, uri: Uri?) {
+        val entry = ChartPhoto(bitmap, corners, uri)
         chartPhotos += entry
         val thumb = ImageView(activity).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -466,7 +534,7 @@ class MeasureScreen(private val activity: MainActivity) {
                 mainHandler.post {
                     result.onSuccess { (bitmap, corners) ->
                         if (corners != null) found++
-                        addChartPhoto(bitmap, corners, select = i == 0)
+                        addChartPhoto(bitmap, corners, i == 0, uri)
                         activity.journal("chart photo: loaded ${bitmap.width}x${bitmap.height}, corners ${corners?.joinToString { Math.round(it).toString() } ?: "not found"}")
                     }.onFailure { failed++; activity.journal("chart photo: $uri: $it") }
                 }
@@ -499,10 +567,22 @@ class MeasureScreen(private val activity: MainActivity) {
                     val n = if (geometries.count { it.size >= 4 } >= maxOf(1, geometries.size / 2)) 4 else 2
                     FloatArray(n) { c -> geometries.filter { it.size > c }.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
                 }
-                // The framing ring, the median of the photos on each side, and the card's corners likewise.
-                val rings = entries.mapNotNull { runCatching { ChartReader.readRing(it.bitmap, it.corners!!) }.getOrNull() }
+                // The card's edges and the framing ring, read on each photo at twice the editing
+                // size when it can be reloaded (the markers scale with it), then the median of the
+                // photos: of the corners coordinate by coordinate, of the cuts side by side.
+                for (e in entries) {
+                    val large = e.uri?.let { uri -> runCatching { Photos.loadForMeasure(activity.contentResolver, uri, MEASURE_SIDE) }.getOrNull() }
+                        ?.takeIf { it.width > e.bitmap.width && Math.abs(it.width.toFloat() / it.height - e.bitmap.width.toFloat() / e.bitmap.height) < 0.01f }
+                    val photo = large ?: e.bitmap
+                    val k = photo.width.toFloat() / e.bitmap.width
+                    val c = FloatArray(8) { e.corners!![it] * k }
+                    e.card = runCatching { ChartReader.measureCard(photo, c) }.getOrNull()
+                    e.ring = runCatching { ChartReader.readRing(photo, c, e.card) }.getOrNull()
+                    activity.journal("chart photo ${entries.indexOf(e) + 1}: read at ${photo.width}x${photo.height}, card ${e.card?.joinToString { "%.3f".format(it) } ?: "none"}, ring ${e.ring?.joinToString { "%.2f".format(it) } ?: "none"}")
+                }
+                val rings = entries.mapNotNull { it.ring }
                 val ring = if (rings.isEmpty()) null else FloatArray(4) { c -> rings.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
-                val cards = entries.mapNotNull { runCatching { ChartReader.measureCard(it.bitmap, it.corners!!) }.getOrNull() }
+                val cards = entries.mapNotNull { it.card }
                 val card = if (cards.isEmpty()) null else FloatArray(8) { c -> cards.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
                 Measured(reading, ChartReader.fit(reading, type), geo, ring, card)
             }
@@ -522,6 +602,9 @@ class MeasureScreen(private val activity: MainActivity) {
                     val geoText = if (geo != null || ring != null || card != null) "\n" + s.measureGeometry.format(describeGeometry(s, measuredGeo)) else ""
                     val ringText = if (ring == null) "\n" + s.measureRingNone else ""
                     measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText + ringText
+                    val found = entries.count { it.card != null }
+                    measureCardReport.text = if (found == 0) s.measureCardNone else s.measureCardFound.format(found, count)
+                    updateCardView()
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
                     val colour = !type.monochrome && reading.patches.isNotEmpty()
                     measureColourBox.visibility = if (colour) View.VISIBLE else View.GONE

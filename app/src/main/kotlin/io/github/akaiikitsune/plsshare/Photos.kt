@@ -455,6 +455,24 @@ object Photos {
         return Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.width * scale), Math.round(bitmap.height * scale), true)
     }
 
+    /**
+     * Decode a photo for measuring (its EXIF rotation applied) with its longest side scaled to
+     * [side] at most, in one pass: the ring's thin lines and the card's edges read better at
+     * twice the size the editor keeps.
+     */
+    fun loadForMeasure(resolver: ContentResolver, uri: Uri, side: Int): Bitmap {
+        val source = ImageDecoder.createSource(resolver, uri)
+        return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            decoder.isMutableRequired = false
+            val longest = maxOf(info.size.width, info.size.height)
+            if (longest > side) {
+                val scale = side.toFloat() / longest
+                decoder.setTargetSize(Math.round(info.size.width * scale), Math.round(info.size.height * scale))
+            }
+        }
+    }
+
     /** Decode a photo with its EXIF rotation applied, downsampled to about [MAX_SIDE], as a software bitmap. */
     fun load(resolver: ContentResolver, uri: Uri): Bitmap {
         val source = ImageDecoder.createSource(resolver, uri)

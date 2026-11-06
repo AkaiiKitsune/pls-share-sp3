@@ -137,6 +137,17 @@ class ScreenshotTest {
             (sfield("measureWarped") as android.widget.ImageView).setImageBitmap(reading.warped)
             (sfield("rectifiedBox") as View).visibility = View.VISIBLE
             (sfield("measureResultBox") as View).visibility = View.VISIBLE
+            // The card and the window drawn on the selected photo (a ring print with its card edges found).
+            val ringPhoto = javaClass.getResourceAsStream("/ring-wood.jpg")!!.use { android.graphics.BitmapFactory.decodeStream(it)!! }
+            val ringCorners = ChartReader.detectCorners(ringPhoto, FilmType.COLOR)!!
+            scall("addChartPhoto", ringPhoto, ringCorners, true)
+            val photos = sfield("chartPhotos") as ArrayList<*>
+            val entry = photos.last()
+            entry.javaClass.getDeclaredField("card").apply { isAccessible = true }.set(entry, ChartReader.measureCard(ringPhoto, ringCorners))
+            MeasureScreen::class.java.getDeclaredField("measuredRing").apply { isAccessible = true }.set(screen, floatArrayOf(3f, 0.5f, 1.8f, 0.5f))
+            (sfield("measureCardReport") as android.widget.TextView).text = activity.s.measureCardFound.format(1, 1)
+            (sfield("measureResultBox") as View).visibility = View.VISIBLE
+            scall("updateCardView")
             val measure = field(activity, "measureView") as View
             shoot(measure, "09-measure", w, h, scrollTo = 300)
             shoot(measure, "09b-measure-result", w, h, scrollTo = 5000)

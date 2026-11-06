@@ -511,26 +511,34 @@ object ChartReader {
         return floatArrayOf(stepTop, gradientBottom, stepLeft, patchRight)
     }
 
+    /** Luma of a photo pixel at a file position, through the content homography (no copy of the photo). */
+    private fun lumaAtFile(photo: Bitmap, h: DoubleArray, fx: Double, fy: Double): Float {
+        val p = map(h, TestChart.fileToContent(fx.toFloat()).toDouble(), TestChart.fileToContent(fy.toFloat()).toDouble())
+        val c = photo.getPixel(p[0].toInt().coerceIn(0, photo.width - 1), p[1].toInt().coerceIn(0, photo.height - 1))
+        return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f
+    }
+
+    /** Positions along a side clear of the numbers, which sit at 22 %, 32 %, … 92 % along each side. */
+    private fun clearOfNumbers(along: Double): Boolean = (1..8).none { Math.abs(along - (0.12 + 0.1 * it)) < 0.025 }
+
     /**
      * Reads the framing ring: how much of the file the frame hides on each side (top, bottom,
-     * left, right), in percent of the file, from the number of ring lines still visible there.
+     * left, right), in percent of the file, at a third of the way along the side.
+     *
      * Lines sit every 1 % from the file's edge (1 % to 8 %, plus a bold line on the edge itself):
      * counting them outwards from the content, on a stretch of the side clear of the numbers,
-     * gives the first whole rectangle, and the hidden width is half a percent less (the frame's
-     * edge falls somewhere inside that last percent). Null when a side cannot be read.
+     * gives the first whole rectangle, and the hidden width is taken half a percent less (the
+     * frame's edge falls somewhere inside that last percent). With the [card] known (its corners
+     * in file coordinates), the reading is refined: when the print is a little turned, the next
+     * line shows at one end of the side and not at the other, and where it stops is a point of the
+     * frame's edge, whose direction is the card's; the hidden width then follows exactly. Null
+     * when a side cannot be read.
      */
-    fun readRing(photo: Bitmap, corners: FloatArray): FloatArray? {
+    fun readRing(photo: Bitmap, corners: FloatArray, card: FloatArray? = null): FloatArray? {
         val h = homography(corners)
-        val full = IntArray(photo.width * photo.height)
-        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
-        fun lumaFile(fx: Double, fy: Double): Float {
-            val p = map(h, TestChart.fileToContent(fx.toFloat()).toDouble(), TestChart.fileToContent(fy.toFloat()).toDouble())
-            val c = sample(full, photo.width, photo.height, p[0], p[1])
-            return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f
-        }
-        // Positions along a side clear of every number (the numbers sit at 22 %, 32 %, … 92 % along
-        // each side, and the top and bottom sides' "8" reaches into the first 11 % of the left and
-        // right sides' lines).
+        fun lumaFile(fx: Double, fy: Double) = lumaAtFile(photo, h, fx, fy)
+        // The first positions clear of the numbers (the top and bottom sides' "8" reaches into the
+        // first 11 % of the left and right sides' lines, so nothing before 0.12).
         val clear = listOf(0.14, 0.17, 0.27, 0.37, 0.47)
         // The ring's own white, between the lines and the content, on each side.
         fun white(side: Int): Float {
@@ -539,12 +547,13 @@ object ChartReader {
             }.sorted()
             return v[v.size / 2]
         }
-        // Count the lines along one perpendicular, from the content outwards past the file's edge.
+        // The lines along one perpendicular, from the content outwards past the file's edge: their
+        // positions t (file units in from the file's edge; negative beyond it), innermost first.
         // The thin lines are a pixel or two wide in the photo and the paper between close lines is
         // greyed by their halo, so a line is a dip of the profile (averaged over a short stretch
         // along the line, which is straight in chart coordinates) at least 10 % below the paper on
         // both sides of it, within three quarters of a percent; no fixed threshold would do.
-        fun count(side: Int, along: Double, white: Float): Int {
+        fun lines(side: Int, along: Double, white: Float): List<Double> {
             val step = 0.0004
             val start = 0.10; val end = -0.03
             val samples = ((start - end) / step).toInt()
@@ -593,21 +602,59 @@ object ChartReader {
             var lastLine = 0.11
             var minGap = 0.015
             var maxGap = 0.075
-            var n = 0
+            val found = ArrayList<Double>()
             for (centre in dips) {
                 val gap = lastLine - centre
-                if (gap > minGap && gap < maxGap) { n++; lastLine = centre; minGap = 0.0045; maxGap = 0.017 }
+                if (gap > minGap && gap < maxGap) { found += centre; lastLine = centre; minGap = 0.0045; maxGap = 0.017 }
             }
-            return n
+            return found
+        }
+        // How the frame's edge runs along each side, as dt/dalong, from the card's edges (parallel to it).
+        fun edgeSlope(side: Int): Double {
+            val c = card ?: return 0.0
+            return when (side) {
+                0 -> (c[3] - c[1]) / (c[2] - c[0]).toDouble()
+                1 -> -(c[5] - c[7]) / (c[4] - c[6]).toDouble()
+                2 -> (c[6] - c[0]) / (c[7] - c[1]).toDouble()
+                else -> -(c[4] - c[2]) / (c[5] - c[3]).toDouble()
+            }
         }
         val out = FloatArray(4)
         for (side in 0 until 4) {
             val w = white(side)
             if (w < 60f) return null
-            val counts = clear.map { count(side, it, w) }.sorted()
+            val counts = clear.map { lines(side, it, w).size }.sorted()
             val n = counts[counts.size / 2]
             // n lines seen: the first whole rectangle is 9 - n (9 lines when the edge line shows).
             out[side] = if (n >= 9) 0f else Math.max(0f, (8 - n) + 0.5f)
+            if (card == null || n >= 9) continue
+            // Refinement: along the whole side, does the next line show at one end only?
+            val alongs = (11..89).map { it / 100.0 }.filter { clearOfNumbers(it) }
+            val seen = alongs.map { lines(side, it, w) }
+            val ns = seen.map { it.size }
+            val lo = ns.min(); val hi = ns.max()
+            if (hi != lo + 1) continue
+            // The best split into a run with hi lines and a run with lo lines, either way round.
+            var bestSplit = -1; var bestErrors = Int.MAX_VALUE; var hiFirst = true
+            for (split in 3..alongs.size - 3) { // at least three positions on each side of the crossing
+                val e1 = (0 until split).count { ns[it] != hi } + (split until alongs.size).count { ns[it] != lo }
+                val e2 = (0 until split).count { ns[it] != lo } + (split until alongs.size).count { ns[it] != hi }
+                if (e1 < bestErrors) { bestErrors = e1; bestSplit = split; hiFirst = true }
+                if (e2 < bestErrors) { bestErrors = e2; bestSplit = split; hiFirst = false }
+            }
+            if (bestSplit < 0 || bestErrors > alongs.size / 8) continue
+            val crossing = (alongs[bestSplit - 1] + alongs[bestSplit]) / 2
+            // The line that stops there: its position, the median where it shows.
+            val positions = seen.filter { it.size == hi }.map { it.last() }.sorted()
+            val lineT = positions[positions.size / 2]
+            val slope = edgeSlope(side)
+            // The edge hides the line where it runs further in than the line does: on the side of the
+            // crossing where the slope takes it inwards. Anything else is noise, not a crossing.
+            val hiddenAfter = slope > 0
+            if (hiddenAfter != hiFirst || Math.abs(slope) < 1e-4) continue
+            val hidden = (lineT + slope * (0.3 - crossing)) * 100
+            // Within the percent the coarse count allowed, give or take the line's own thickness.
+            if (Math.abs(hidden - ((8 - lo) + 0.5)) <= 1.2) out[side] = Math.max(0f, hidden.toFloat())
         }
         return out
     }
@@ -623,11 +670,9 @@ object ChartReader {
      */
     fun measureCard(photo: Bitmap, corners: FloatArray): FloatArray? {
         val h = homography(corners)
-        val full = IntArray(photo.width * photo.height)
-        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
         fun rgb(fx: Double, fy: Double): Int {
             val p = map(h, TestChart.fileToContent(fx.toFloat()).toDouble(), TestChart.fileToContent(fy.toFloat()).toDouble())
-            return sample(full, photo.width, photo.height, p[0], p[1])
+            return photo.getPixel(p[0].toInt().coerceIn(0, photo.width - 1), p[1].toInt().coerceIn(0, photo.height - 1))
         }
         fun luma(c: Int) = (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f
         val white = (0 until 9).map { luma(rgb(0.1 + 0.1 * it, 0.095)) }.sorted()[4]

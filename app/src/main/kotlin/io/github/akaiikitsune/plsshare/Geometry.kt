@@ -191,6 +191,18 @@ class PrinterGeometry(
         return floatArrayOf(left, top, right, bottom)
     }
 
+    /** The window's corners back in file coordinates (top-left, top-right, bottom-right, bottom-left), for drawing; null without it. */
+    fun windowCornersFile(): FloatArray? {
+        val w = windowMm ?: return null
+        val inv = ChartReader.invert(cardMap ?: return null)
+        val out = FloatArray(8)
+        for ((i, c) in listOf(w[0] to w[1], w[2] to w[1], w[2] to w[3], w[0] to w[3]).withIndex()) {
+            val p = ChartReader.map(inv, c.first.toDouble(), c.second.toDouble())
+            out[2 * i] = toFileX(p[0].toFloat()); out[2 * i + 1] = toFile(p[1].toFloat())
+        }
+        return out
+    }
+
     /** The square the image is printed into: the window's centre and mean side, (cx, cy, side) in millimetres. */
     val targetMm: FloatArray? get() {
         val w = windowMm ?: return null

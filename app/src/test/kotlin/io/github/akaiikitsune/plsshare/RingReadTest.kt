@@ -33,7 +33,11 @@ class RingReadTest {
             assertNotNull("$name aligned", corners)
             val g = ChartReader.measureGeometry(photo, corners!!)
             val ring = ChartReader.readRing(photo, corners)
-            println("$name: geometry " + (g?.joinToString { "%.3f".format(it) } ?: "null") + " ring " + (ring?.joinToString { "%.1f".format(it) } ?: "null"))
+            val card = ChartReader.measureCard(photo, corners)
+            val fine = card?.let { ChartReader.readRing(photo, corners, it) }
+            println("$name: geometry " + (g?.joinToString { "%.3f".format(it) } ?: "null") + " ring " + (ring?.joinToString { "%.1f".format(it) } ?: "null") +
+                " fine " + (fine?.joinToString { "%.2f".format(it) } ?: "no card"))
+            if (fine != null) for (side in 0 until 4) assertEquals("$name side $side fine vs coarse", ring!![side], fine[side], 1.2f)
             assertNotNull("$name geometry", g)
             assertNotNull("$name ring", ring)
             geometries += g!!
