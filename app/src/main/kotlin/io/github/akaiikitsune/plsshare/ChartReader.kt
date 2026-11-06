@@ -1029,7 +1029,7 @@ object ChartReader {
      * correction is applied at the input and the tone curves bend it.
      */
     private fun fitHues(m: FilmModel, reading: Reading) {
-        m.resetHues()
+        m.resetHueTables()
         val hsvP = FloatArray(3); val hsvM = FloatArray(3); val hsvS = FloatArray(3)
         repeat(PASSES) {
             val shiftSum = FloatArray(FilmModel.HUES); val gainSum = FloatArray(FilmModel.HUES); val valueSum = FloatArray(FilmModel.HUES); val weight = FloatArray(FilmModel.HUES)
@@ -1073,26 +1073,30 @@ object ChartReader {
         }
     }
 
-    /**
-     * Fit the film model to a reading: tones from the grey steps, then the global colour terms,
-     * then the per-hue table from the colour patches.
-     */
-    fun fit(reading: Reading, type: FilmType): Fit {
-        val m = FilmModel.defaults(type)
-        val g = reading.greys.map { luma(it) }
+    /** The grey steps' RMS error, in percent, of a model's rendering of the 11 levels. */
+    private fun greyRms(m: FilmModel, g: List<Float>): Double {
         val n = g.size
-        // The tone curve: from the continuous gradient when it was read (dense: the plateaus'
-        // ends and the midtone curve come out at a fraction of a step), else from the 11 steps.
-        val black = g.take(3).minOrNull() ?: 0f
-        val white = g.takeLast(3).maxOrNull() ?: 1f
-        // The gradient is used only when it agrees with the steps (same print, so the same black
-        // and white within a tenth): on old prints the frame hid its bottom, and the camera's own
-        // tone mapping can treat the two differently.
-        val gradientOk = reading.gradient.size >= 16 && reading.gradient.map { luma(it) }.let { gl ->
-            val lo = gl.take(gl.size / 8).sorted()[gl.size / 16]; val hi = gl.takeLast(gl.size / 8).sorted().let { it[it.size - 1 - gl.size / 16] }
-            Math.abs(lo - black) < 0.1f && Math.abs(hi - white) < 0.1f && (1 until gl.size).count { gl[it] < gl[it - 1] - 0.03f } <= gl.size / 10
+        var err = 0.0
+        for (i in 0 until n) {
+            val v = Math.round(i * 255f / (n - 1))
+            val px = intArrayOf(Color.rgb(v, v, v))
+            m.simulate(px)
+            val pl = (0.299 * Color.red(px[0]) + 0.587 * Color.green(px[0]) + 0.114 * Color.blue(px[0])) / 255.0
+            err += (pl - g[i]) * (pl - g[i])
         }
-        val dense = gradientOk
+        return Math.sqrt(err / n) * 100
+    }
+
+    /**
+     * The tone curve's clips and gamma: from the 11 steps, or ([dense]) from the gradient's
+     * shape, which has the plateaus' ends and the midtone curve at a fraction of a step. The
+     * black and white levels come from the steps either way (flat patches like any area of a
+     * photo): the gradient only gives the shape, relative to its own black and white, since the
+     * light's unevenness between the top of the print and its bottom shifts its levels against
+     * the steps' by a few percent.
+     */
+    private fun fitTones(m: FilmModel, reading: Reading, g: List<Float>, black: Float, white: Float, dense: Boolean) {
+        val n = g.size
         val tones: List<Pair<Float, Float>> = if (dense) {
             // The gradient's bins: level v at the bin's centre, lightly smoothed over three bins against the printer's dither.
             val gl = reading.gradient.map { luma(it) }
@@ -1102,13 +1106,6 @@ object ChartReader {
                 v to t
             }
         } else g.indices.map { i -> i.toFloat() / (n - 1) to g[i] }
-        // The black and white levels come from the steps, flat patches like any area of a photo.
-        // The gradient only gives the curve's shape: where its plateaus end and how the midtones
-        // run between them, relative to its own black and white (the light's unevenness between
-        // the top of the print and its bottom shifts the gradient's levels against the steps' by
-        // a few percent, which the shape does not see).
-        m.blackLevel = black.coerceIn(0f, 0.4f)
-        m.whiteLevel = white.coerceIn(0.7f, 1f)
         val lowT = if (dense) tones.take(tones.size / 8).map { it.second }.sorted()[tones.size / 16] else black
         val highT = if (dense) tones.takeLast(tones.size / 8).map { it.second }.sorted().let { it[it.size - 1 - tones.size / 16] } else white
         // Clips: the first / last level whose value leaves the plateau.
@@ -1130,6 +1127,38 @@ object ChartReader {
             if (u > 0.08f && u < 0.92f && t > 0.03f && t < 0.97f) gammas += Math.log(t.toDouble()) / Math.log(u.toDouble())
         }
         m.gamma = (if (gammas.isEmpty()) 0.62 else gammas.sorted()[gammas.size / 2]).toFloat().coerceIn(0.3f, 2f)
+    }
+
+    /**
+     * Fit the film model to a reading: tones from the grey steps (and the gradient's shape when
+     * it renders the steps at least as well), then the global colour terms, the crosstalk matrix
+     * and the per-hue tables from the colour patches, keeping whichever combination renders the
+     * patches best.
+     */
+    fun fit(reading: Reading, type: FilmType): Fit {
+        val m = FilmModel.defaults(type)
+        val g = reading.greys.map { luma(it) }
+        val n = g.size
+        val black = g.take(3).minOrNull() ?: 0f
+        val white = g.takeLast(3).maxOrNull() ?: 1f
+        m.blackLevel = black.coerceIn(0f, 0.4f)
+        m.whiteLevel = white.coerceIn(0.7f, 1f)
+        fitTones(m, reading, g, black, white, dense = false)
+        // The gradient is tried only when it agrees with the steps (same print, so the same black
+        // and white within a tenth: on old prints the frame hid its bottom, and the camera's own
+        // tone mapping can treat the two differently), and kept only when it renders the steps
+        // at least as well: the printer treats continuous tones a little differently from flat
+        // patches.
+        val gradientOk = reading.gradient.size >= 16 && reading.gradient.map { luma(it) }.let { gl ->
+            val lo = gl.take(gl.size / 8).sorted()[gl.size / 16]; val hi = gl.takeLast(gl.size / 8).sorted().let { it[it.size - 1 - gl.size / 16] }
+            Math.abs(lo - black) < 0.1f && Math.abs(hi - white) < 0.1f && (1 until gl.size).count { gl[it] < gl[it - 1] - 0.03f } <= gl.size / 10
+        }
+        if (gradientOk) {
+            val fromSteps = m.copy()
+            val stepsRms = greyRms(m, g)
+            fitTones(m, reading, g, black, white, dense = true)
+            if (greyRms(m, g) > stepsRms) { m.blackClip = fromSteps.blackClip; m.whiteClip = fromSteps.whiteClip; m.gamma = fromSteps.gamma }
+        }
 
         // Blacks' warmth from the darkest step: R/B ratio against the model's black levels.
         val b0 = reading.greys[0]
@@ -1170,15 +1199,7 @@ object ChartReader {
         }
 
         // Fit quality: RMS between measured grey steps and the model's prediction.
-        var err = 0.0
-        for (i in 0 until n) {
-            val v = Math.round(i * 255f / (n - 1))
-            val px = intArrayOf(Color.rgb(v, v, v))
-            m.simulate(px)
-            val pl = (0.299 * Color.red(px[0]) + 0.587 * Color.green(px[0]) + 0.114 * Color.blue(px[0])) / 255.0
-            err += (pl - g[i]) * (pl - g[i])
-        }
-        val greyRms = Math.sqrt(err / n) * 100
+        val greyRms = greyRms(m, g)
 
         val colourBefore = colourRms(m, reading)
         var colourAfter = colourBefore
@@ -1188,14 +1209,18 @@ object ChartReader {
             // only if it actually helps.
             val blue = m.blueDarkening
             m.blueDarkening = 0f
-            fitCrosstalk(m, reading)
-            var best = colourRms(m, reading)
-            if (best >= colourBefore) { m.resetCrosstalk(); best = colourBefore }
-            val withMatrix = m.crosstalk.clone()
-            fitHues(m, reading)
-            colourAfter = colourRms(m, reading)
-            if (colourAfter >= best) { m.resetHues(); withMatrix.copyInto(m.crosstalk); colourAfter = best }
-            if (!m.colourMeasured) m.blueDarkening = blue
+            val candidates = ArrayList<Pair<FilmModel, Double>>()
+            candidates += m.copy().apply { blueDarkening = blue } to colourBefore
+            val matrixOnly = m.copy().also { fitCrosstalk(it, reading) }
+            candidates += matrixOnly to colourRms(matrixOnly, reading)
+            val huesOnly = m.copy().also { fitHues(it, reading) }
+            candidates += huesOnly to colourRms(huesOnly, reading)
+            val both = matrixOnly.copy().also { fitHues(it, reading) }
+            candidates += both to colourRms(both, reading)
+            val (winner, rms) = candidates.minByOrNull { it.second }!!
+            winner.crosstalk.copyInto(m.crosstalk); winner.hueShift.copyInto(m.hueShift); winner.hueGain.copyInto(m.hueGain); winner.hueValue.copyInto(m.hueValue)
+            m.saturation = winner.saturation; m.blueDarkening = winner.blueDarkening
+            colourAfter = rms
         }
         return Fit(m, greyRms, colourBefore, colourAfter)
     }
@@ -1209,7 +1234,7 @@ object ChartReader {
      */
     private fun fitCrosstalk(m: FilmModel, reading: Reading) {
         m.resetCrosstalk()
-        m.resetHues()
+        m.resetHueTables()
         val base = m.baseColorMatrix().array
         // The inverse tone curve of each channel as the print itself shows it, on the grey steps:
         // a neutral input passes the matrix unchanged (rows sum to one), so a channel's reading

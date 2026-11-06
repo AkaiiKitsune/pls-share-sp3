@@ -235,6 +235,8 @@ class FilmModel(
 
     fun resetCrosstalk() { IDENTITY.copyInto(crosstalk) }
 
+    fun resetHueTables() { hueShift.fill(0f); hueGain.fill(1f); hueValue.fill(1f) }
+
     /** The brightness factor of a colour of saturation [s] at hue [h]: 1 for neutrals, the sector's value gain when fully saturated. */
     private fun valueFactor(h: Float, s: Float): Float = 1f - (1f - sectorValue(hueValue, h)) * s * hueWeight(s)
 
