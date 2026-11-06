@@ -923,6 +923,38 @@ class MainActivity : Activity() {
         geometryReadout = ui.text("", 13f)
         root.addView(geometryReadout)
         ui.space(root, 6)
+        // By hand: each reference line's offset from where the file puts it, in tenths of a percent.
+        fun geoSlider(label: String, read: () -> Float, fileValue: Float, write: (Float) -> Unit) {
+            val value = ui.text("", 13f, alpha = 0.7f).apply { gravity = Gravity.END }
+            fun show(v: Float) { value.text = "%+.1f %%".format((v - fileValue) * 100f) }
+            show(read())
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(ui.text(label, 13f, alpha = 0.7f), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+                addView(value, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+            }
+            root.addView(header)
+            val bar = SeekBar(this).apply {
+                max = 160
+                progress = Math.round((read() - fileValue) * 1000f) + 80
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                        val v = fileValue + (progress - 80) / 1000f
+                        show(v)
+                        if (fromUser) { write(v); geometry.save(prefs); applyGeometry(); refreshPreview() }
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) {}
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {}
+                })
+            }
+            geometryBars += bar to { Math.round((read() - fileValue) * 1000f) + 80 }
+            root.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        }
+        geoSlider(s.geometryTop, { geometry.stepTop }, PrinterGeometry.STEP_TOP_FILE) { geometry.stepTop = it }
+        geoSlider(s.geometryBottom, { geometry.gradientBottom }, PrinterGeometry.GRADIENT_BOTTOM_FILE) { geometry.gradientBottom = it }
+        geoSlider(s.geometryLeft, { geometry.stepLeft }, PrinterGeometry.STEP_LEFT_FILE) { geometry.stepLeft = it }
+        geoSlider(s.geometryRight, { geometry.patchRight }, PrinterGeometry.PATCH_RIGHT_FILE) { geometry.patchRight = it }
+        ui.space(root, 6)
         geometryToggle = ui.softButton(s.geometryCompensate) {
             geometry.compensate = !geometry.compensate
             geometry.save(prefs)
@@ -1098,7 +1130,8 @@ class MainActivity : Activity() {
         o.put("films", films)
         o.put("presets", org.json.JSONArray(prefs.getString(Presets.KEY, null) ?: "[]"))
         o.put("compensate", compensate)
-        o.put("geometry", org.json.JSONObject().put("stepTop", geometry.stepTop.toDouble()).put("gradientBottom", geometry.gradientBottom.toDouble()).put("compensate", geometry.compensate))
+        o.put("geometry", org.json.JSONObject().put("stepTop", geometry.stepTop.toDouble()).put("gradientBottom", geometry.gradientBottom.toDouble())
+            .put("stepLeft", geometry.stepLeft.toDouble()).put("patchRight", geometry.patchRight.toDouble()).put("compensate", geometry.compensate))
         o.put("filmType", filmType.key)
         return o
     }
@@ -1143,6 +1176,8 @@ class MainActivity : Activity() {
                 parsed.optJSONObject("geometry")?.let { g ->
                     geometry.stepTop = g.optDouble("stepTop", geometry.stepTop.toDouble()).toFloat()
                     geometry.gradientBottom = g.optDouble("gradientBottom", geometry.gradientBottom.toDouble()).toFloat()
+                    geometry.stepLeft = g.optDouble("stepLeft", geometry.stepLeft.toDouble()).toFloat()
+                    geometry.patchRight = g.optDouble("patchRight", geometry.patchRight.toDouble()).toFloat()
                     geometry.compensate = g.optBoolean("compensate", geometry.compensate)
                     geometry.save(prefs)
                 }
@@ -1957,7 +1992,7 @@ class MainActivity : Activity() {
         film = model
         film.save(prefs)
         if (geo != null) {
-            geometry.stepTop = geo[0]; geometry.gradientBottom = geo[1]
+            geometry.set(geo)
             geometry.save(prefs)
         }
         syncCalibration()
@@ -1971,18 +2006,18 @@ class MainActivity : Activity() {
     /** The bands the frame will hide, on the home preview and in the editor, and the calibration readout. */
     private fun applyGeometry() {
         previewImage.hiddenTop = geometry.hiddenTop; previewImage.hiddenBottom = geometry.hiddenBottom
+        previewImage.hiddenLeft = geometry.hiddenLeft; previewImage.hiddenRight = geometry.hiddenRight
         editorView.hiddenTop = geometry.hiddenTop; editorView.hiddenBottom = geometry.hiddenBottom
+        editorView.hiddenLeft = geometry.hiddenLeft; editorView.hiddenRight = geometry.hiddenRight
         if (::geometryReadout.isInitialized) {
-            geometryReadout.text = describeGeometry(geometry)
+            geometryReadout.text = describeGeometry(s, geometry)
             geometryToggle.setTextColor(if (geometry.compensate) ui.accent else labelColor)
             ui.setEnabledLook(geometryToggle, geometry.measured)
+            for ((bar, read) in geometryBars) bar.progress = read()
         }
     }
 
-    private fun describeGeometry(g: PrinterGeometry): String {
-        if (!g.measured) return s.geometryNone
-        return s.geometryReadout.format((g.stretch - 1f) * 100f, g.hiddenTop * 100f, g.hiddenBottom * 100f)
-    }
+    private val geometryBars = ArrayList<Pair<SeekBar, () -> Int>>()
 
     private fun setFilmType(type: FilmType) {
         if (type == filmType) return

@@ -35,7 +35,7 @@ internal fun describeHues(s: Strings, model: FilmModel): String {
 /** The printer's geometry in a sentence, or "not measured". */
 internal fun describeGeometry(s: Strings, g: PrinterGeometry): String {
     if (!g.measured) return s.geometryNone
-    return s.geometryReadout.format((g.stretch - 1f) * 100f, g.hiddenTop * 100f, g.hiddenBottom * 100f)
+    return s.geometryReadout.format((g.stretch - 1f) * 100f, (g.stretchX - 1f) * 100f, g.hiddenTop * 100f, g.hiddenBottom * 100f, g.hiddenLeft * 100f, g.hiddenRight * 100f)
 }
 
 /**
@@ -481,7 +481,10 @@ class MeasureScreen(private val activity: MainActivity) {
                 }
                 val reading = ChartReader.average(entries.map { it.reading!! })
                 val geometries = entries.mapNotNull { runCatching { ChartReader.measureGeometry(it.bitmap, it.corners!!) }.getOrNull() }
-                val geo = if (geometries.isEmpty()) null else FloatArray(2) { c -> geometries.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+                val geo = if (geometries.isEmpty()) null else {
+                    val n = if (geometries.count { it.size >= 4 } >= maxOf(1, geometries.size / 2)) 4 else 2
+                    FloatArray(n) { c -> geometries.filter { it.size > c }.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+                }
                 Triple(reading, ChartReader.fit(reading, type), geo)
             }
             mainHandler.post {
@@ -494,7 +497,7 @@ class MeasureScreen(private val activity: MainActivity) {
                     syncMeasureButtons()
                     updateRectified()
                     val count = entries.size
-                    val geoText = geo?.let { g -> "\n" + s.measureGeometry.format(describeGeometry(s, PrinterGeometry(g[0], g[1]))) } ?: ""
+                    val geoText = geo?.let { g -> "\n" + s.measureGeometry.format(describeGeometry(s, PrinterGeometry().apply { set(g) })) } ?: ""
                     measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
                     val colour = !type.monochrome && reading.patches.isNotEmpty()

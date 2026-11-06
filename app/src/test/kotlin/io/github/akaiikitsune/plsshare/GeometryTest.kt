@@ -25,15 +25,19 @@ class GeometryTest {
             val photo = load(name)
             val corners = ChartReader.detectCorners(photo, FilmType.COLOR)!!
             val g = ChartReader.measureGeometry(photo, corners)
-            println("$name: steps top %s, gradient bottom %s".format(g?.get(0)?.let { "%.3f".format(it) }, g?.get(1)?.let { "%.3f".format(it) }))
+            println("$name: " + (g?.joinToString { "%.3f".format(it) } ?: "null"))
             assertNotNull("$name measured", g)
-            results += g!!
+            assertEquals("$name measured all four edges", 4, g!!.size)
+            results += g
         }
         // The same print every time: the measurements must agree within a couple of percent.
-        for (c in 0 until 2) {
+        for (c in 0 until 4) {
             val values = results.map { it[c] }
-            assertTrue("spread of ${if (c == 0) "steps top" else "gradient bottom"}: ${values.max() - values.min()}", values.max() - values.min() < 0.05f)
+            assertTrue("spread of edge $c: ${values.max() - values.min()}", values.max() - values.min() < 0.05f)
         }
+        // Columns match the file within a couple of percent.
+        assertEquals(PrinterGeometry.STEP_LEFT_FILE, results.map { it[2] }.average().toFloat(), 0.025f)
+        assertEquals(PrinterGeometry.PATCH_RIGHT_FILE, results.map { it[3] }.average().toFloat(), 0.025f)
         // And show the stretch: the gradient's bottom lands lower than in the file.
         assertTrue(results.map { it[1] }.average() > 0.965)
     }
@@ -58,5 +62,11 @@ class GeometryTest {
         assertEquals(1f - PrinterGeometry.WINDOW_BOTTOM, g.hiddenBottom, 1e-4f)
         g.compensate = false
         assertTrue(g.hiddenTop > 0f && g.hiddenBottom > 0.04f)
+        // Columns: a 2 % horizontal stretch pulls the right edge out of the window.
+        val gx = PrinterGeometry(stepLeft = 0.04f, patchRight = 0.966f, compensate = false)
+        assertTrue("stretchX %.3f".format(gx.stretchX), gx.stretchX > 1.015f && gx.stretchX < 1.025f)
+        assertTrue(gx.hiddenRight > 0.01f && gx.hiddenLeft < 0.005f)
+        val warpedX = PrinterGeometry(stepLeft = 0.04f, patchRight = 0.966f).prewarp(image)
+        assertEquals(64, warpedX.width)
     }
 }

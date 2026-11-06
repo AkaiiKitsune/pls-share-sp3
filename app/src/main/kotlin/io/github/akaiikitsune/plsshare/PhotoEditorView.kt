@@ -38,6 +38,10 @@ class PhotoEditorView(context: Context) : View(context) {
         set(value) { field = value; invalidate() }
     var hiddenBottom = 0f
         set(value) { field = value; invalidate() }
+    var hiddenLeft = 0f
+        set(value) { field = value; invalidate() }
+    var hiddenRight = 0f
+        set(value) { field = value; invalidate() }
     private val hiddenPaint = Paint().apply { color = 0x73000000 }
     private val hiddenLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f; color = 0xB3FFFFFF.toInt() }
 
@@ -571,6 +575,14 @@ class PhotoEditorView(context: Context) : View(context) {
         if (hiddenBottom > 0f) {
             canvas.drawRect(l, t + size * (1f - hiddenBottom), l + size, t + size, hiddenPaint)
             canvas.drawLine(l, t + size * (1f - hiddenBottom), l + size, t + size * (1f - hiddenBottom), hiddenLine)
+        }
+        if (hiddenLeft > 0f) {
+            canvas.drawRect(l, t, l + size * hiddenLeft, t + size, hiddenPaint)
+            canvas.drawLine(l + size * hiddenLeft, t, l + size * hiddenLeft, t + size, hiddenLine)
+        }
+        if (hiddenRight > 0f) {
+            canvas.drawRect(l + size * (1f - hiddenRight), t, l + size, t + size, hiddenPaint)
+            canvas.drawLine(l + size * (1f - hiddenRight), t, l + size * (1f - hiddenRight), t + size, hiddenLine)
         }
     }
 }

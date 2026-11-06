@@ -438,8 +438,9 @@ object ChartReader {
 
     /**
      * Where the grey steps' top (file 4 %) and the gradient's bottom (file 96 %) actually are on
-     * the print, in chart coordinates aligned on the patch grid: the vertical profiles are scanned
-     * from outside the chart inwards until the first dark pixel. Null when either is not found.
+     * the print, in chart coordinates aligned on the patch grid, then the steps' left edge (4 %)
+     * and the patches' right edge (94.8 %) when they can be found too: (top, bottom[, left, right]).
+     * Null when the rows cannot be measured.
      */
     fun measureGeometry(photo: Bitmap, corners: FloatArray): FloatArray? {
         val h = homography(corners)
@@ -469,7 +470,25 @@ object ChartReader {
         val stepTop = scan(listOf(0.08, 0.11, 0.14), 0.11, -0.0025, -0.12) ?: return null
         val gradientBottom = scan(listOf(0.08, 0.12, 0.16), 0.91, 0.0025, 1.12) ?: return null
         if (stepTop < -0.1f || stepTop > 0.12f || gradientBottom < 0.88f || gradientBottom > 1.1f) return null
-        return floatArrayOf(stepTop, gradientBottom)
+        // Columns: the black step's left edge (file 4 %) and the right column of patches' right
+        // edge (file 94.8 %), through its dark patches (blue, purple, dark brown).
+        fun scanX(ys: List<Double>, from: Double, step: Double, limit: Double, t: Float): Float? {
+            val found = ys.mapNotNull { y ->
+                if (luma(from, y) >= t) return@mapNotNull null
+                var x = from
+                var hit: Double? = null
+                while (if (step < 0) x >= limit else x <= limit) { if (luma(x, y) >= t) { hit = x; break }; x += step }
+                hit
+            }
+            return if (found.size < 2) null else found.sorted()[found.size / 2].toFloat()
+        }
+        val stepLeft = scanX(listOf(0.08, 0.11, 0.14), 0.10, -0.0025, -0.12, threshold)
+        // The right column's patches are lighter than the black step (purple, brown): a softer threshold, and a start well inside.
+        val patchRight = scanX(listOf(0.306, 0.479, 0.651), 0.87, 0.0025, 1.08, white * 0.62f)
+        if (stepLeft == null || patchRight == null || stepLeft < -0.1f || stepLeft > 0.12f || patchRight < 0.86f || patchRight > 1.05f) {
+            return floatArrayOf(stepTop, gradientBottom)
+        }
+        return floatArrayOf(stepTop, gradientBottom, stepLeft, patchRight)
     }
 
     // ------------------------------------------------------------ Anchors: the four corner patches
