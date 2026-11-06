@@ -89,6 +89,8 @@ class ScreenshotTest {
         shoot(editor, "03-editor-adjust", w, h)
 
         call(activity, "showTab", false)
+        call(activity, "addOverlay", Overlay(Overlay.Kind.DATE))
+        call(activity, "addOverlay", Overlay(Overlay.Kind.EMOJI, text = "🎉", size = 0.14f).also { it.x = 0.8f; it.y = 0.25f; it.rotation = 20f })
         shoot(editor, "04-editor-texts", w, h)
 
         call(activity, "showTab", true)

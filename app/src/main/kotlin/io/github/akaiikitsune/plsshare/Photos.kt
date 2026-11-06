@@ -30,7 +30,10 @@ class Overlay(
     /** Margin between the text and the edge for anchored placement, as a fraction of the print size. */
     var margin: Float = 0.06f,
 ) {
-    enum class Kind { TEXT, DATE, TIME, DATETIME }
+    enum class Kind { TEXT, DATE, TIME, DATETIME, EMOJI }
+
+    /** Degrees, clockwise, applied around the overlay's centre. */
+    var rotation: Float = 0f
     enum class Style { SHADOW, OUTLINE, PILL }
 
     /** System font families, so no font file ships with the app. Missing families fall back to sans-serif. */
@@ -62,13 +65,13 @@ class Overlay(
         y = when (anchor.v) { -1 -> margin + halfH; 1 -> 1f - margin - halfH; else -> 0.5f }.coerceIn(0.02f, 0.98f)
     }
 
-    fun copy() = Overlay(kind, text, x, y, size, dark, style, font, anchor, margin)
+    fun copy() = Overlay(kind, text, x, y, size, dark, style, font, anchor, margin).also { it.rotation = rotation }
 
     /** The string to draw, resolving date kinds against [photoDate] (or now). */
     fun resolve(photoDate: Long?): String {
         val date = Date(photoDate ?: System.currentTimeMillis())
         return when (kind) {
-            Kind.TEXT -> text
+            Kind.TEXT, Kind.EMOJI -> text
             Kind.DATE -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(date)
             Kind.TIME -> DateFormat.getTimeInstance(DateFormat.SHORT).format(date)
             Kind.DATETIME -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(date) + "  " + DateFormat.getTimeInstance(DateFormat.SHORT).format(date)
@@ -345,6 +348,22 @@ object PrintRenderer {
             val x = cx - width / 2
             val fg = if (o.dark) Color.BLACK else Color.WHITE
             val bg = if (o.dark) Color.WHITE else Color.BLACK
+            canvas.save()
+            if (o.rotation != 0f) canvas.rotate(o.rotation, cx, cy)
+            if (o.kind == Overlay.Kind.EMOJI) {
+                // Emoji keep their own colours: no outline or pill, just a soft shadow for legibility.
+                overlayPaint.color = Color.WHITE
+                overlayPaint.setShadowLayer(px * 0.1f, 0f, px * 0.05f, 0x80000000.toInt())
+                canvas.drawText(text, x, baseline, overlayPaint)
+                overlayPaint.clearShadowLayer()
+                canvas.restore()
+                val margin = px * 0.2f
+                bounds += floatArrayOf(
+                    (x - margin - left) / size, (cy - px * 0.6f - top) / size,
+                    (x + width + margin - left) / size, (cy + px * 0.6f - top) / size,
+                )
+                continue
+            }
             when (o.style) {
                 Overlay.Style.SHADOW -> {
                     overlayPaint.setShadowLayer(px * 0.12f, 0f, px * 0.06f, (0xB0 shl 24) or (bg and 0xFFFFFF))
@@ -365,6 +384,7 @@ object PrintRenderer {
             overlayPaint.color = fg
             canvas.drawText(text, x, baseline, overlayPaint)
             overlayPaint.clearShadowLayer()
+            canvas.restore()
             val margin = px * 0.4f
             bounds += floatArrayOf(
                 (x - margin - left) / size, (cy - px * 0.7f - top) / size,

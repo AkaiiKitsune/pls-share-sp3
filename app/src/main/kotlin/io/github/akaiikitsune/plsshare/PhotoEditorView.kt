@@ -427,6 +427,10 @@ class PhotoEditorView(context: Context) : View(context) {
                 lastX = event.x; lastY = event.y
                 touching = true
             }
+            MotionEvent.ACTION_POINTER_DOWN -> if (event.pointerCount == 2 && dragging != null) {
+                overlayTwistStart = angleBetween(event)
+                overlayRotationStart = dragging!!.rotation
+            }
             MotionEvent.ACTION_MOVE -> {
                 val o = dragging
                 if (o != null && event.pointerCount == 1) {
@@ -434,6 +438,16 @@ class PhotoEditorView(context: Context) : View(context) {
                     o.y = (o.y + (event.y - lastY) / size).coerceIn(0.02f, 0.98f)
                     o.anchor = null
                     lastX = event.x; lastY = event.y
+                    overlaysChanged()
+                } else if (o != null && event.pointerCount >= 2) {
+                    var delta = angleBetween(event) - overlayTwistStart
+                    while (delta > 180f) delta -= 360f
+                    while (delta < -180f) delta += 360f
+                    var r = overlayRotationStart + delta
+                    // Snap to the quarter turns.
+                    val nearest = Math.round(r / 90f) * 90f
+                    if (Math.abs(r - nearest) < ROTATION_SNAP) r = nearest
+                    o.rotation = ((r % 360f) + 360f) % 360f
                     overlaysChanged()
                 }
             }
@@ -447,6 +461,9 @@ class PhotoEditorView(context: Context) : View(context) {
         overlayScale.onTouchEvent(event)
         return true
     }
+
+    private var overlayTwistStart = 0f
+    private var overlayRotationStart = 0f
 
     private val overlayScale = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {

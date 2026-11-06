@@ -167,6 +167,10 @@ class MainActivity : Activity() {
     private val fontButtons = LinkedHashMap<Overlay.Font, Button>()
     private lateinit var overlayMarginBar: SeekBar
     private lateinit var overlaySizeValue: TextView
+    private lateinit var overlayRotationBar: SeekBar
+    private lateinit var overlayRotationValue: TextView
+    /** Overlay-editor rows that only apply to text (not emoji): dark switch, fonts, styles. */
+    private val textOnlyViews = ArrayList<View>()
     private lateinit var presetRow2: LinearLayout
     private lateinit var filmButton: Button
     private val presets by lazy { Presets(prefs) }
@@ -1186,6 +1190,8 @@ class MainActivity : Activity() {
             ui.softButton(s.addDateTime) { addOverlay(Overlay(Overlay.Kind.DATETIME, size = 0.035f)) }.apply { tooltipText = s.textsHint },
             gap = 6,
         ))
+        ui.space(panel, 6)
+        panel.addView(ui.softButton(s.addEmoji) { pickEmoji() }.apply { tooltipText = s.textsHint }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(panel, 12)
         overlayList = ui.column()
         panel.addView(overlayList, LinearLayout.LayoutParams(ui.match, ui.wrap))
@@ -1242,6 +1248,7 @@ class MainActivity : Activity() {
             }
         }
         overlayEditor.addView(overlayDarkSwitch)
+        textOnlyViews += overlayDarkSwitch
         ui.space(overlayEditor, 8)
         overlayEditor.addView(ui.text(s.overlayFont, 13f, alpha = 0.7f))
         ui.space(overlayEditor, 4)
@@ -1251,7 +1258,7 @@ class MainActivity : Activity() {
             fontButtons[font] = b
             fontRow.addView(b, LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(6) })
         }
-        overlayEditor.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(fontRow) })
+        overlayEditor.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(fontRow); textOnlyViews += this })
         ui.space(overlayEditor, 8)
         overlayEditor.addView(ui.text(s.overlayPosition, 13f, alpha = 0.7f))
         ui.space(overlayEditor, 4)
@@ -1290,18 +1297,67 @@ class MainActivity : Activity() {
         }
         overlayEditor.addView(overlayMarginBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(overlayEditor, 6)
+        val rotationHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(ui.text(s.overlayRotation, 13f, alpha = 0.7f), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            overlayRotationValue = ui.text("0°", 13f, alpha = 0.7f)
+            addView(overlayRotationValue, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+            setOnClickListener { editorView.selectedOverlay?.let { o -> editorView.overlaysEdit { o.rotation = 0f }; refreshOverlayPanel() } }
+        }
+        overlayEditor.addView(rotationHeader)
+        overlayRotationBar = SeekBar(this).apply {
+            max = 360
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    overlayRotationValue.text = "${(progress + 180) % 360}°"
+                    if (!fromUser) return
+                    val o = editorView.selectedOverlay ?: return
+                    o.rotation = ((progress - 180).toFloat() % 360f + 360f) % 360f
+                    editorView.overlaysChanged()
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) = editorView.beginInteraction()
+                override fun onStopTrackingTouch(seekBar: SeekBar) = editorView.endInteraction()
+            })
+        }
+        overlayEditor.addView(overlayRotationBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(overlayEditor, 6)
         overlayEditor.addView(ui.row(
             ui.softButton(s.styleShadow) { setOverlayStyle(Overlay.Style.SHADOW) },
             ui.softButton(s.styleOutline) { setOverlayStyle(Overlay.Style.OUTLINE) },
             ui.softButton(s.stylePill) { setOverlayStyle(Overlay.Style.PILL) },
             gap = 6,
-        ))
+        ).also { textOnlyViews += it })
         ui.space(overlayEditor, 6)
         overlayEditor.addView(ui.softButton(s.remove) { removeSelectedOverlay() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
         panel.addView(overlayEditor, LinearLayout.LayoutParams(ui.match, ui.wrap))
 
         editorView.onOverlaySelected = { refreshOverlayPanel() }
         return panel
+    }
+
+    private val emojis = listOf(
+        "😀", "😂", "😍", "🥰", "😎", "🤩", "😜", "🥳", "😭", "🤔", "😴", "🤯",
+        "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "💖", "✨", "⭐", "🔥", "💯",
+        "🎉", "🎂", "🎁", "🎈", "🎄", "🎃", "👻", "🌈", "☀️", "🌙", "🌸", "🌻",
+        "🐱", "🐶", "🦊", "🐼", "🦄", "🍕", "🍰", "☕", "🍺", "🥂", "✈️", "📷",
+        "👍", "👏", "🙌", "🤘", "✌️", "💪", "🫶", "👑", "💀", "🫧", "🎵", "🏆",
+    )
+
+    private fun pickEmoji() {
+        val grid = android.widget.GridLayout(this).apply { columnCount = 6; setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12)) }
+        lateinit var dialog: AlertDialog
+        for (e in emojis) {
+            grid.addView(TextView(this).apply {
+                text = e
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+                gravity = Gravity.CENTER
+                setPadding(ui.dp(8), ui.dp(8), ui.dp(8), ui.dp(8))
+                setOnClickListener { dialog.dismiss(); addOverlay(Overlay(Overlay.Kind.EMOJI, text = e, size = 0.12f, style = Overlay.Style.SHADOW)) }
+            })
+        }
+        dialog = AlertDialog.Builder(this).setTitle(s.pickEmoji).setView(ScrollView(this).apply { addView(grid) }).setNegativeButton(s.cancel, null).create()
+        dialog.show()
     }
 
     private fun addOverlay(overlay: Overlay) {
@@ -1401,6 +1457,9 @@ class MainActivity : Activity() {
         overlayDarkSwitch.isChecked = o.dark
         overlayMarginBar.progress = Math.round(o.margin * 100f)
         overlayMarginValue.text = "${overlayMarginBar.progress} %"
+        overlayRotationBar.progress = (Math.round(o.rotation) + 180) % 360
+        overlayRotationValue.text = "${Math.round(o.rotation)}°"
+        for (v in textOnlyViews) v.visibility = if (o.kind == Overlay.Kind.EMOJI) View.GONE else View.VISIBLE
         syncFontButtons()
     }
 
