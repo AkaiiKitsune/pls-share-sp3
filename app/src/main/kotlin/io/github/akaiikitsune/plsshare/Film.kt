@@ -390,6 +390,90 @@ class FilmModel(
         ))
     }
 
+    // ------------------------------------------------------------------ Fast path: 3D lookup table
+
+    /**
+     * The whole pipeline (optional compensation, then simulation) sampled on a 33³ grid of
+     * input colours, so that previews cost a trilinear interpolation per pixel instead of the HSV
+     * maths of the per-hue correction. Cached per model state; prints use the exact per-pixel path.
+     */
+    private var lutKey: String? = null
+    private var lutPlain: IntArray? = null
+    private var lutCompensated: IntArray? = null
+
+    private fun stateKey(): String = listOf(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening,
+        hueShift.joinToString(","), hueGain.joinToString(","), hueValue.joinToString(",")).joinToString("|")
+
+    private fun buildLut(compensated: Boolean): IntArray {
+        val n = Lut.LUT_N
+        val grid = IntArray(n * n * n)
+        var k = 0
+        for (r in 0 until n) for (g in 0 until n) for (b in 0 until n) {
+            grid[k++] = Color.rgb(r * 255 / (n - 1), g * 255 / (n - 1), b * 255 / (n - 1))
+        }
+        if (compensated) compensate(grid)
+        simulate(grid)
+        return grid
+    }
+
+    /** The table for the current state, built on first use after any change. */
+    fun lut(compensated: Boolean): IntArray {
+        val key = stateKey()
+        if (key != lutKey) { lutKey = key; lutPlain = null; lutCompensated = null }
+        return if (compensated) lutCompensated ?: buildLut(true).also { lutCompensated = it }
+        else lutPlain ?: buildLut(false).also { lutPlain = it }
+    }
+
+    /** Preview version of [compensate] + [simulate]: the cached 3D table, trilinear. */
+    fun simulateFast(pixels: IntArray, compensated: Boolean) {
+        Lut.applyLut(pixels, lut(compensated))
+    }
+
+    object Lut {
+        const val LUT_N = 33
+        private val idx = IntArray(256)
+        private val frac = IntArray(256)
+
+        init {
+            for (v in 0..255) {
+                val p = v * (LUT_N - 1) * 256 / 255 // fixed point 24.8 grid position
+                var i = p shr 8
+                var f = p and 0xFF
+                if (i >= LUT_N - 1) { i = LUT_N - 2; f = 256 }
+                idx[v] = i; frac[v] = f
+            }
+        }
+
+        fun applyLut(pixels: IntArray, lut: IntArray) {
+            val n = LUT_N
+            val nn = n * n
+            for (i in pixels.indices) {
+                val p = pixels[i]
+                val r = (p shr 16) and 0xFF; val g = (p shr 8) and 0xFF; val b = p and 0xFF
+                val ri = idx[r]; val gi = idx[g]; val bi = idx[b]
+                val rf = frac[r]; val gf = frac[g]; val bf = frac[b]
+                val base = ri * nn + gi * n + bi
+                val c000 = lut[base]; val c001 = lut[base + 1]
+                val c010 = lut[base + n]; val c011 = lut[base + n + 1]
+                val c100 = lut[base + nn]; val c101 = lut[base + nn + 1]
+                val c110 = lut[base + nn + n]; val c111 = lut[base + nn + n + 1]
+                // Weights in 1/256 units for each corner, combined in 1/(256³) then shifted back.
+                val w000 = (256 - rf) * (256 - gf) * (256 - bf); val w001 = (256 - rf) * (256 - gf) * bf
+                val w010 = (256 - rf) * gf * (256 - bf); val w011 = (256 - rf) * gf * bf
+                val w100 = rf * (256 - gf) * (256 - bf); val w101 = rf * (256 - gf) * bf
+                val w110 = rf * gf * (256 - bf); val w111 = rf * gf * bf
+                val half = 1L shl 23
+                val nr = ((((c000 shr 16) and 0xFF).toLong() * w000 + ((c001 shr 16) and 0xFF).toLong() * w001 + ((c010 shr 16) and 0xFF).toLong() * w010 + ((c011 shr 16) and 0xFF).toLong() * w011 +
+                    ((c100 shr 16) and 0xFF).toLong() * w100 + ((c101 shr 16) and 0xFF).toLong() * w101 + ((c110 shr 16) and 0xFF).toLong() * w110 + ((c111 shr 16) and 0xFF).toLong() * w111 + half) shr 24).toInt()
+                val ng = ((((c000 shr 8) and 0xFF).toLong() * w000 + ((c001 shr 8) and 0xFF).toLong() * w001 + ((c010 shr 8) and 0xFF).toLong() * w010 + ((c011 shr 8) and 0xFF).toLong() * w011 +
+                    ((c100 shr 8) and 0xFF).toLong() * w100 + ((c101 shr 8) and 0xFF).toLong() * w101 + ((c110 shr 8) and 0xFF).toLong() * w110 + ((c111 shr 8) and 0xFF).toLong() * w111 + half) shr 24).toInt()
+                val nb = (((c000 and 0xFF).toLong() * w000 + (c001 and 0xFF).toLong() * w001 + (c010 and 0xFF).toLong() * w010 + (c011 and 0xFF).toLong() * w011 +
+                    (c100 and 0xFF).toLong() * w100 + (c101 and 0xFF).toLong() * w101 + (c110 and 0xFF).toLong() * w110 + (c111 and 0xFF).toLong() * w111 + half) shr 24).toInt()
+                pixels[i] = (p and 0xFF000000.toInt()) or (nr.coerceIn(0, 255) shl 16) or (ng.coerceIn(0, 255) shl 8) or nb.coerceIn(0, 255)
+            }
+        }
+    }
+
     /** A copy of [source] seen through the model. */
     fun simulated(source: Bitmap): Bitmap {
         val w = source.width

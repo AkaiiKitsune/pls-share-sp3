@@ -1434,8 +1434,9 @@ class MainActivity : Activity() {
         // adjust tab only. Long-pressing a tool shows what it does.
         histogramButton = ui.softButton(s.histogram) { toggleHistogram() }.apply { tooltipText = s.histogramTip }
         clippingButton = ui.softButton(s.clipping) { toggleClipping() }.apply { tooltipText = s.clippingHint }
+        // No tooltip here: the button is held, and a long press would pop the tooltip every time.
         val compareButton = ui.softButton(s.compare) {}.apply {
-            tooltipText = s.compareTip
+            isLongClickable = false
             setOnTouchListener { v, event ->
                 when (event.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> { editorView.showOriginal = true; v.isPressed = true }

@@ -146,3 +146,61 @@ class ChartReaderTest {
         assertEquals("saturation agrees", md.saturation, mf.saturation, 0.25f)
     }
 }
+
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [31])
+class FilmLutTest {
+    private fun model() = FilmModel.defaults(FilmType.COLOR).apply {
+        hueShift[0] = 12f; hueGain[0] = 0.8f; hueShift[3] = -25f; hueGain[3] = 1.1f; hueValue[2] = 0.5f; hueValue[4] = 0.8f; blueDarkening = 0.3f
+    }
+
+    @Test
+    fun `the 3D table matches the exact pipeline`() {
+        val m = model()
+        val rnd = java.util.Random(7)
+        for (compensated in listOf(false, true)) {
+            val src = IntArray(4000) { android.graphics.Color.rgb(rnd.nextInt(256), rnd.nextInt(256), rnd.nextInt(256)) } +
+                TestChart.patches.toIntArray() + IntArray(11) { v -> val g = v * 255 / 10; android.graphics.Color.rgb(g, g, g) }
+            val exact = src.clone()
+            if (compensated) m.compensate(exact)
+            m.simulate(exact)
+            val fast = src.clone()
+            m.simulateFast(fast, compensated)
+            var worst = 0; var sum = 0L
+            for (i in src.indices) {
+                val d = maxOf(Math.abs(android.graphics.Color.red(exact[i]) - android.graphics.Color.red(fast[i])), Math.abs(android.graphics.Color.green(exact[i]) - android.graphics.Color.green(fast[i])), Math.abs(android.graphics.Color.blue(exact[i]) - android.graphics.Color.blue(fast[i])))
+                worst = maxOf(worst, d); sum += d
+            }
+            println("lut (compensated=$compensated): mean error %.2f, worst $worst".format(sum.toDouble() / src.size))
+            // The inverse tone curves and the hue inverse have steps that the grid smooths a little.
+            assertTrue("mean error small", sum.toDouble() / src.size < 2.5)
+            assertTrue("worst error bounded", worst <= 48)
+        }
+    }
+
+    @Test
+    fun `the table is rebuilt when the model changes`() {
+        val m = model()
+        val a = m.lut(false)
+        m.gamma += 0.1f
+        val b = m.lut(false)
+        assertTrue(a !== b)
+        assertTrue(b === m.lut(false))
+    }
+
+    @Test
+    fun `the fast path is fast`() {
+        val m = model()
+        val px = IntArray(480 * 480) { it * 7919 }
+        m.simulateFast(px.clone(), true) // warm-up, builds the table
+        val t0 = System.nanoTime()
+        m.simulateFast(px, true)
+        val fastMs = (System.nanoTime() - t0) / 1e6
+        val t1 = System.nanoTime()
+        m.compensate(px); m.simulate(px)
+        val exactMs = (System.nanoTime() - t1) / 1e6
+        println("480²: fast %.0f ms, exact %.0f ms".format(fastMs, exactMs))
+        assertTrue("fast path is at least 3× faster", fastMs * 3 < exactMs)
+    }
+}

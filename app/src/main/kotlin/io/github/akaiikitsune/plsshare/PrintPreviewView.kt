@@ -49,8 +49,7 @@ class PrintPreviewView(context: Context) : View(context) {
         val h = source.height
         val pixels = IntArray(w * h)
         source.getPixels(pixels, 0, w, 0, 0, w, h)
-        if (compensated) film.compensate(pixels)
-        film.simulate(pixels)
+        film.simulateFast(pixels, compensated)
         return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply { setPixels(pixels, 0, w, 0, 0, w, h) }
     }
 
