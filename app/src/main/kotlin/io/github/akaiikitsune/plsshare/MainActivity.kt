@@ -8,7 +8,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
@@ -73,6 +75,8 @@ class MainActivity : Activity() {
         private const val MENU_QUEUE = 7
         private const val MENU_CALIBRATE = 8
         private const val MENU_COMPENSATE = 9
+        private const val MENU_COLLAGE = 10
+        private const val REQUEST_PICK_CELL = 4
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
         private const val UNDO_DEPTH = 40
@@ -108,6 +112,9 @@ class MainActivity : Activity() {
     private lateinit var guideView: View
     private lateinit var historyView: View
     private lateinit var calibrateView: View
+    private lateinit var collageView: View
+    private lateinit var collage: CollageView
+    private var pendingCell = -1
     private lateinit var chartView: ImageView
     private lateinit var film: FilmModel
     private var compensate = false
@@ -241,6 +248,7 @@ class MainActivity : Activity() {
         guideView = buildGuide()
         historyView = buildHistory()
         calibrateView = buildCalibration()
+        collageView = buildCollage()
         container.addView(homeView)
         applyFilmType()
         applyFilmModel()
@@ -379,7 +387,7 @@ class MainActivity : Activity() {
         cancelButton = ui.softButton(s.cancelPrint) {
             PrintService.cancel(this)
             ui.setEnabledLook(cancelButton, false)
-            message(s.cancelRequested)
+            toast(s.cancelRequested)
         }.apply { visibility = View.GONE }
         root.addView(cancelButton, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
         messageView = ui.text("", 14f).apply { visibility = View.GONE }
@@ -455,6 +463,7 @@ class MainActivity : Activity() {
         menu.menu.add(0, MENU_GUIDE, 0, s.menuGuide)
         menu.menu.add(0, MENU_PIN, 1, s.menuPin)
         menu.menu.add(0, MENU_HISTORY, 2, s.menuHistory)
+        menu.menu.add(0, MENU_COLLAGE, 3, s.menuCollage)
         menu.menu.add(0, MENU_EXPORT, 3, s.menuExport)
         menu.menu.add(0, MENU_UPDATE, 4, s.menuUpdate)
         menu.menu.add(0, MENU_CALIBRATE, 5, s.menuCalibrate)
@@ -467,6 +476,7 @@ class MainActivity : Activity() {
                 MENU_PIN -> askPin()
                 MENU_HISTORY -> { refreshHistory(); show(historyView) }
                 MENU_EXPORT -> exportCurrent()
+                MENU_COLLAGE -> show(collageView)
                 MENU_UPDATE -> updater.check(interactive = true) { message(it) }
                 MENU_DEBUG -> {
                     debug = !debug
@@ -478,7 +488,7 @@ class MainActivity : Activity() {
                     compensate = !compensate
                     prefs.edit().putBoolean(PREF_COMPENSATE, compensate).apply()
                     applyFilmModel()
-                    message(if (compensate) s.compensationOn else s.compensationOff)
+                    toast(if (compensate) s.compensationOn else s.compensationOff)
                 }
                 MENU_QUEUE -> {
                     queueEnabled = !queueEnabled
@@ -571,6 +581,12 @@ class MainActivity : Activity() {
         if (text.isNotBlank()) journal(text)
     }
 
+    /** A passing confirmation (a setting toggled, something saved): a toast, journaled, never left on screen. */
+    private fun toast(text: String) {
+        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show()
+        journal(text)
+    }
+
     private fun setBusy(busy: Boolean) {
         updateButtons()
         progressBar.visibility = if (busy) View.VISIBLE else View.GONE
@@ -645,6 +661,14 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_PICK && resultCode == RESULT_OK) data?.data?.let { loadPhoto(it) }
+        if (requestCode == REQUEST_PICK_CELL && resultCode == RESULT_OK && data?.data != null && pendingCell >= 0) {
+            val cell = pendingCell
+            val uri = data.data!!
+            Thread {
+                val result = runCatching { Photos.scaledForEditing(Photos.load(contentResolver, uri), 1200) }
+                mainHandler.post { result.onSuccess { collage.setCell(cell, it) }.onFailure { message(s.photoError.format(it.message ?: "")) } }
+            }.start()
+        }
         if (requestCode == REQUEST_PICK_MANY && resultCode == RESULT_OK && data != null) {
             val uris = ArrayList<Uri>()
             val clip = data.clipData
@@ -688,7 +712,7 @@ class MainActivity : Activity() {
             mainHandler.post {
                 setBusy(false)
                 refreshQueue()
-                message(s.queued.format(Jobs.list(Jobs.queueDir(this)).size))
+                toast(s.queued.format(Jobs.list(Jobs.queueDir(this)).size))
                 journal("queued $count photo(s)")
             }
         }.start()
@@ -698,7 +722,7 @@ class MainActivity : Activity() {
         val bitmap = photo ?: return message(s.noPhoto)
         Jobs.save(Jobs.queueDir(this), renderForPrint(bitmap, editState))
         refreshQueue()
-        message(s.queued.format(Jobs.list(Jobs.queueDir(this)).size))
+        toast(s.queued.format(Jobs.list(Jobs.queueDir(this)).size))
     }
 
     private fun refreshQueue() {
@@ -852,6 +876,89 @@ class MainActivity : Activity() {
         startPrinting(listOf(file), archive = false)
     }
 
+    // ---------------------------------------------------------------- Collage
+
+    private fun buildCollage(): View {
+        val root = ui.column(20)
+        collage = CollageView(this).apply {
+            onPickCell = { i ->
+                pendingCell = i
+                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Intent(MediaStore.ACTION_PICK_IMAGES)
+                else Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+                startActivityForResult(intent, REQUEST_PICK_CELL)
+            }
+        }
+        root.addView(collage, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 8)
+        root.addView(ui.text(s.collageHint, 12f, alpha = 0.6f).apply { gravity = Gravity.CENTER })
+        ui.space(root, 12)
+        // Layout pickers: small drawings of each layout.
+        val layoutRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val layoutButtons = ArrayList<View>()
+        for (layout in CollageLayout.values()) {
+            val icon = object : View(this) {
+                private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+                override fun onDraw(c: Canvas) {
+                    val sz = minOf(width, height).toFloat()
+                    p.color = if (collage.layout == layout) ui.accent else 0x60808080
+                    val g = sz * 0.06f
+                    for (cell in layout.cells) c.drawRect(cell[0] * sz + g / 2, cell[1] * sz + g / 2, cell[2] * sz - g / 2, cell[3] * sz - g / 2, p)
+                }
+            }.apply {
+                setOnClickListener { collage.layout = layout; layoutButtons.forEach { it.invalidate() } }
+            }
+            layoutButtons += icon
+            layoutRow.addView(icon, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)).apply { marginEnd = ui.dp(12) })
+        }
+        root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(layoutRow) })
+        ui.space(root, 12)
+        fun simpleSlider(label: String, max: Int, initial: Int, onValue: (Int) -> Unit) {
+            root.addView(ui.text(label, 13f, alpha = 0.7f))
+            root.addView(SeekBar(this).apply {
+                this.max = max
+                progress = initial
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) { if (fromUser) onValue(progress) }
+                    override fun onStartTrackingTouch(seekBar: SeekBar) {}
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {}
+                })
+            }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+            ui.space(root, 6)
+        }
+        simpleSlider(s.collageGap, 10, 2) { collage.gap = it / 100f }
+        simpleSlider(s.collageRounded, 10, 0) { collage.rounded = it / 100f }
+        root.addView(ui.text(s.collageBackground, 13f, alpha = 0.7f))
+        ui.space(root, 4)
+        val bgRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (color in frameColors) {
+            bgRow.addView(View(this).apply {
+                background = ui.rounded(color, 18)
+                setOnClickListener { collage.background = color }
+            }, LinearLayout.LayoutParams(ui.dp(36), ui.dp(36)).apply { marginEnd = ui.dp(10) })
+        }
+        root.addView(bgRow)
+        ui.space(root, 16)
+        root.addView(ui.primaryButton(s.collageUse) { useCollage() }, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        ui.space(root, 8)
+        return fixedHeaderScreen(titleBar(s.collageTitle, ui.softButton(s.back) { show(homeView) }.apply { minimumWidth = 0 }), root)
+    }
+
+    /** The collage becomes the current photo, ready for the editor and the printer. */
+    private fun useCollage() {
+        if (collage.filledCount() == 0) return message(s.collageEmpty)
+        val rendered = collage.render(PREVIEW_SIZE * 2)
+        photo?.recycle()
+        photo = rendered
+        editorPhoto = rendered
+        photoDate = null
+        editState.reset()
+        editState.photoDate = null
+        refreshPreview()
+        updateButtons()
+        message("")
+        show(homeView)
+    }
+
     // ---------------------------------------------------------------- History and export
 
     private fun buildHistory(): View {
@@ -905,7 +1012,7 @@ class MainActivity : Activity() {
     private fun exportAndShare(rendered: Bitmap) {
         val uri = Jobs.exportToGallery(this, rendered)
         if (uri == null) return message(s.exportFailed)
-        message(s.exported)
+        toast(s.exported)
         startActivity(Intent.createChooser(
             Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             s.share,
@@ -924,7 +1031,7 @@ class MainActivity : Activity() {
                 // The queue is the natural home for several photos; show it even if it is hidden.
                 queueCard.visibility = View.VISIBLE
                 queueMany(uris)
-                message(s.sharedMany.format(uris.size))
+                toast(s.sharedMany.format(uris.size))
             }
             return
         }
@@ -937,7 +1044,7 @@ class MainActivity : Activity() {
         }
         if (uri != null) {
             loadPhoto(uri)
-            message(s.shared)
+            toast(s.shared)
         }
     }
 
@@ -1198,7 +1305,7 @@ class MainActivity : Activity() {
         ui.space(panel, 8)
 
         overlayEditor = ui.column()
-        overlayEditor.addView(ui.text(s.overlayText, 13f, alpha = 0.7f))
+        overlayEditor.addView(ui.text(s.overlayText, 13f, alpha = 0.7f).also { textOnlyViews += it })
         overlayTextField = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             addTextChangedListener(object : android.text.TextWatcher {
@@ -1250,7 +1357,7 @@ class MainActivity : Activity() {
         overlayEditor.addView(overlayDarkSwitch)
         textOnlyViews += overlayDarkSwitch
         ui.space(overlayEditor, 8)
-        overlayEditor.addView(ui.text(s.overlayFont, 13f, alpha = 0.7f))
+        overlayEditor.addView(ui.text(s.overlayFont, 13f, alpha = 0.7f).also { textOnlyViews += it })
         ui.space(overlayEditor, 4)
         val fontRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         for (font in Overlay.Font.values()) {
@@ -1451,6 +1558,7 @@ class MainActivity : Activity() {
         overlayEditor.visibility = if (o == null) View.GONE else View.VISIBLE
         if (o == null) return
         overlayTextField.visibility = if (o.kind == Overlay.Kind.TEXT) View.VISIBLE else View.GONE
+        if (o.kind != Overlay.Kind.TEXT) textOnlyViews.firstOrNull()?.visibility = View.GONE
         if (o.kind == Overlay.Kind.TEXT && overlayTextField.text.toString() != o.text) overlayTextField.setText(o.text)
         overlaySizeBar.progress = (o.size * 1000f).toInt() - 15
         overlaySizeValue.text = "${Math.round(o.size * PREVIEW_SIZE)} px"
@@ -1532,12 +1640,12 @@ class MainActivity : Activity() {
         val forFilm = editorView.filmPreview && !compensate
         val levels = if (forFilm) Processing.autoLevels(pixels, film.blackClip, film.whiteClip) else Processing.autoLevels(pixels)
         if (levels == null) {
-            message(s.autoNothing)
+            toast(s.autoNothing)
             return
         }
         editorView.update { brightness = levels.first; contrast = levels.second }
         syncSliders()
-        message(if (forFilm) s.autoDoneFilm else s.autoDone)
+        toast(if (forFilm) s.autoDoneFilm else s.autoDone)
     }
 
     private fun refreshPresetRow() {
@@ -1571,7 +1679,7 @@ class MainActivity : Activity() {
                 val name = field.text.toString().trim().ifEmpty { return@setPositiveButton }
                 presets.add(name, editorView.state)
                 refreshPresetRow()
-                message(s.presetSaved)
+                toast(s.presetSaved)
             }
             .show()
     }
@@ -1831,7 +1939,7 @@ class MainActivity : Activity() {
     private fun copyJournal() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("pls-share-sp3 log", journalText()))
-        message(s.logCopied)
+        toast(s.logCopied)
     }
 
     private fun shareJournal() {

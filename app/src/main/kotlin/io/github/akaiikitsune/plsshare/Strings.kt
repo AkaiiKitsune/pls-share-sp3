@@ -215,6 +215,14 @@ class Strings private constructor(private val fr: Boolean) {
     val compensationOff get() = t("Compensation d'impression désactivée.", "Print compensation off.")
 
     // Menu
+    val menuCollage get() = t("Collage…", "Collage…")
+    val collageTitle get() = t("Collage", "Collage")
+    val collageHint get() = t("Touchez une case pour y mettre une photo, glissez pour la recadrer, appui long pour la vider.", "Tap a cell to put a photo in it, drag to reframe it, long press to clear it.")
+    val collageGap get() = t("Espacement", "Gap")
+    val collageRounded get() = t("Coins arrondis", "Rounded corners")
+    val collageBackground get() = t("Fond", "Background")
+    val collageUse get() = t("Utiliser ce collage", "Use this collage")
+    val collageEmpty get() = t("Mettez au moins une photo.", "Put at least one photo in.")
     val menuGuide get() = t("Guide de connexion", "Connection guide")
     val menuPin get() = t("PIN de l'imprimante…", "Printer PIN…")
     val menuDebug get() = t("Mode debug", "Debug mode")

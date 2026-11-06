@@ -103,6 +103,13 @@ class ScreenshotTest {
         call(activity, "refreshChart")
         val calibrate = field(activity, "calibrateView") as View
         shoot(calibrate, "07-calibrate", w, h)
+
+        val collageScreen = field(activity, "collageView") as View
+        val collage = field(activity, "collage") as CollageView
+        collage.layout = CollageLayout.BIG_LEFT
+        collage.setCell(0, sample)
+        collage.setCell(2, sample)
+        shoot(collageScreen, "08-collage", w, h)
     }
 
     private fun findScroll(root: View): android.widget.ScrollView? {
