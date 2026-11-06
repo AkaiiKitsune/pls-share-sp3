@@ -198,6 +198,10 @@ class Strings private constructor(private val fr: Boolean) {
     val calTint get() = t("Dominante vert ↔ magenta", "Green ↔ magenta cast")
     val calBlue get() = t("Assombrissement des bleus", "Blue darkening")
     val calReset get() = t("Valeurs par défaut", "Default values")
+    val calPrintSharpness get() = t("Netteté ajoutée à l'impression (le film adoucit)", "Sharpening added at print time (the film softens)")
+    val ratio get() = t("Format de la photo", "Photo ratio")
+    val ratioSquare get() = "1:1"
+    val sharedMany get() = t("%d photos reçues et mises dans la file.", "%d photos received and queued.")
     val compensateHint get() = t(
         "Compenser le tirage applique l'inverse du modèle aux données envoyées à l'imprimante (plus clair, moins contrasté, dominante corrigée), " +
             "pour que le tirage ressemble à l'écran. Ce que le film ne peut pas rendre (extrêmes écrêtés) reste perdu. La mire s'imprime toujours sans compensation.",

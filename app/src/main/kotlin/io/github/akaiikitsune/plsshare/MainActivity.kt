@@ -807,6 +807,7 @@ class MainActivity : Activity() {
         calSlider(s.calWarmth, -60, 60, { Math.round(film.warmth * 100f) }) { film.warmth = it / 100f }
         calSlider(s.calTint, -60, 60, { Math.round(film.tint * 100f) }) { film.tint = it / 100f }
         calSlider(s.calBlue, 0, 100, { Math.round(film.blueDarkening * 100f) }, colourOnly = true) { film.blueDarkening = it / 100f }
+        calSlider(s.calPrintSharpness, 0, 100, { Math.round(film.printSharpness) }) { film.printSharpness = it.toFloat() }
         ui.space(root, 8)
         root.addView(ui.softButton(s.calReset) {
             film = FilmModel.defaults(filmType)
@@ -908,6 +909,21 @@ class MainActivity : Activity() {
     }
 
     private fun handleShareIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_SEND_MULTIPLE) {
+            val uris: List<Uri> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java) ?: emptyList()
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: emptyList()
+            }
+            if (uris.isNotEmpty()) {
+                // The queue is the natural home for several photos; show it even if it is hidden.
+                queueCard.visibility = View.VISIBLE
+                queueMany(uris)
+                message(s.sharedMany.format(uris.size))
+            }
+            return
+        }
         if (intent?.action != Intent.ACTION_SEND) return
         val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -1114,6 +1130,12 @@ class MainActivity : Activity() {
 
         adjust.addView(ui.text(s.frame, 14f, bold = true))
         ui.space(adjust, 6)
+        adjust.addView(ui.text(s.ratio, 13f, alpha = 0.7f))
+        ui.space(adjust, 4)
+        // Width : height of the photo area. Wider than tall only: the square cannot hold a taller area, the band fills the rest.
+        val ratios = listOf("1:1" to 1f, "5:4" to 5f / 4f, "4:3" to 4f / 3f, "3:2" to 3f / 2f, "16:9" to 16f / 9f)
+        adjust.addView(ui.row(*ratios.map { (label, r) -> ui.softButton(label) { setPhotoRatio(r) } }.toTypedArray(), gap = 6))
+        ui.space(adjust, 8)
         slider(adjust, s.frameWidth, 0, 15, { Math.round(it.frameWidth * 100f) }) { v -> editorView.update { frameWidth = v / 100f } }
         slider(adjust, s.frameBand, 0, 30, { Math.round(it.frameBand * 100f) }) { v -> editorView.update { frameBand = v / 100f } }
         slider(adjust, s.cornerRadius, 0, 20, { Math.round(it.cornerRadius * 100f) }) { v -> editorView.update { cornerRadius = v / 100f } }
@@ -1418,6 +1440,17 @@ class MainActivity : Activity() {
         sliders[label] = SliderEntry(bar, value, min, read)
     }
 
+    /** Give the photo area a width:height ratio by sizing the bottom band, keeping the border. */
+    private fun setPhotoRatio(ratio: Float) {
+        editorView.update {
+            val width = 1f - 2f * frameWidth
+            val height = (width / ratio).coerceAtMost(width)
+            frameBand = (1f - 2f * frameWidth - height).coerceIn(0f, 0.6f)
+            scale = 1f; offsetX = 0f; offsetY = 0f
+        }
+        syncSliders()
+    }
+
     private fun syncFrameColors() {
         val current = editorView.state.frameColor
         frameColors.forEachIndexed { i, color ->
@@ -1617,12 +1650,14 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Printing
 
     /** The data for the printer: the look, then the inverse film model when compensation is on. */
+    /** The data for the printer: the look, then print-time sharpening for the film, then the inverse film model when compensation is on. */
     private fun renderForPrint(bitmap: Bitmap, state: EditState): Bitmap {
         val rendered = PrintRenderer.render(bitmap, state, PREVIEW_SIZE)
-        if (!compensate) return rendered
+        if (!compensate && film.printSharpness <= 0f) return rendered
         val pixels = IntArray(PREVIEW_SIZE * PREVIEW_SIZE)
         rendered.getPixels(pixels, 0, PREVIEW_SIZE, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE)
-        film.compensate(pixels)
+        if (film.printSharpness > 0f) Processing.unsharpMask(pixels, PREVIEW_SIZE, PREVIEW_SIZE, film.printSharpness / 100f * 1.2f)
+        if (compensate) film.compensate(pixels)
         rendered.setPixels(pixels, 0, PREVIEW_SIZE, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE)
         return rendered
     }

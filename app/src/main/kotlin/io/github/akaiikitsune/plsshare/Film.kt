@@ -57,6 +57,11 @@ class FilmModel(
     var tint: Float = 0.05f,
     /** Extra darkening of saturated blues (0 = none; the measured print did not show any). */
     var blueDarkening: Float = 0f,
+    /**
+     * Unsharp-mask amount (0..100) applied to the data sent to the printer, never to the preview:
+     * instax film softens the image noticeably, so the print is sharpened in advance.
+     */
+    var printSharpness: Float = 35f,
 ) {
     companion object {
         private const val PREFIX = "film3."
@@ -84,6 +89,7 @@ class FilmModel(
             m.blackLevel = f("blackLevel", m.blackLevel); m.whiteLevel = f("whiteLevel", m.whiteLevel)
             m.shadowWarmth = f("shadowWarmth", m.shadowWarmth); m.saturation = f("saturation", m.saturation)
             m.warmth = f("warmth", m.warmth); m.tint = f("tint", m.tint); m.blueDarkening = f("blueDarkening", m.blueDarkening)
+            m.printSharpness = f("printSharpness", m.printSharpness)
             return m
         }
     }
@@ -96,10 +102,11 @@ class FilmModel(
             .putFloat(prefix + "blackLevel", blackLevel).putFloat(prefix + "whiteLevel", whiteLevel)
             .putFloat(prefix + "shadowWarmth", shadowWarmth).putFloat(prefix + "saturation", saturation)
             .putFloat(prefix + "warmth", warmth).putFloat(prefix + "tint", tint).putFloat(prefix + "blueDarkening", blueDarkening)
+            .putFloat(prefix + "printSharpness", printSharpness)
             .apply()
     }
 
-    fun copy() = FilmModel(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening)
+    fun copy() = FilmModel(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening, printSharpness)
 
     /** The colour part of the model: saturation (none at all on monochrome film) and grey balance. */
     fun colorMatrix(): ColorMatrix {
