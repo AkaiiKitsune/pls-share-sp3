@@ -504,6 +504,107 @@ object ChartReader {
         return floatArrayOf(stepTop, gradientBottom, stepLeft, patchRight)
     }
 
+    /**
+     * Reads the framing ring: how much of the file the frame hides on each side (top, bottom,
+     * left, right), in percent of the file, from the number of ring lines still visible there.
+     * Lines sit every 1 % from the file's edge (1 % to 8 %, plus a bold line on the edge itself):
+     * counting them outwards from the content, on a stretch of the side clear of the numbers,
+     * gives the first whole rectangle, and the hidden width is half a percent less (the frame's
+     * edge falls somewhere inside that last percent). Null when a side cannot be read.
+     */
+    fun readRing(photo: Bitmap, corners: FloatArray): FloatArray? {
+        val h = homography(corners)
+        val full = IntArray(photo.width * photo.height)
+        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
+        fun lumaFile(fx: Double, fy: Double): Float {
+            val p = map(h, TestChart.fileToContent(fx.toFloat()).toDouble(), TestChart.fileToContent(fy.toFloat()).toDouble())
+            val c = sample(full, photo.width, photo.height, p[0], p[1])
+            return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f
+        }
+        // Positions along a side clear of every number (the numbers sit at 22 %, 32 %, … 92 % along
+        // each side, and the top and bottom sides' "8" reaches into the first 11 % of the left and
+        // right sides' lines).
+        val clear = listOf(0.14, 0.17, 0.27, 0.37, 0.47)
+        // The ring's own white, between the lines and the content, on each side.
+        fun white(side: Int): Float {
+            val v = clear.map { along ->
+                when (side) { 0 -> lumaFile(along, 0.095); 1 -> lumaFile(along, 0.905); 2 -> lumaFile(0.095, along); else -> lumaFile(0.905, along) }
+            }.sorted()
+            return v[v.size / 2]
+        }
+        // Count the lines along one perpendicular, from the content outwards past the file's edge.
+        // The thin lines are a pixel or two wide in the photo and the paper between close lines is
+        // greyed by their halo, so a line is a dip of the profile (averaged over a short stretch
+        // along the line, which is straight in chart coordinates) at least 10 % below the paper on
+        // both sides of it, within three quarters of a percent; no fixed threshold would do.
+        fun count(side: Int, along: Double, white: Float): Int {
+            val step = 0.0004
+            val start = 0.10; val end = -0.03
+            val samples = ((start - end) / step).toInt()
+            val profile = FloatArray(samples) { i ->
+                val t = start - i * step
+                var sum = 0f
+                for (k in -2..2) {
+                    val a = along + k * 0.004
+                    sum += when (side) { 0 -> lumaFile(a, t); 1 -> lumaFile(a, 1 - t); 2 -> lumaFile(t, a); else -> lumaFile(1 - t, a) }
+                }
+                sum / 5
+            }
+            val reach = (0.0075 / step).toInt()
+            // Dips: local minima (over ±3 samples) with enough prominence, merged when within 0.4 %.
+            val dips = ArrayList<Double>()
+            var i = 3
+            while (i < samples - 3) {
+                val v = profile[i]
+                if (v < white * 0.5f) {
+                    // Off the print (a dark table, a shadow) when the next 1.2 % is dark throughout: a line never is.
+                    var darkRun = 0
+                    for (j in i until Math.min(samples, i + 30)) if (profile[j] < white * 0.5f) darkRun++
+                    if (darkRun >= 28) break
+                }
+                var isMin = true
+                for (j in i - 3..i + 3) if (profile[j] < v) { isMin = false; break }
+                if (isMin) {
+                    var left = v; var right = v
+                    for (j in Math.max(0, i - reach) until i) if (profile[j] > left) left = profile[j]
+                    for (j in i + 1..Math.min(samples - 1, i + reach)) if (profile[j] > right) right = profile[j]
+                    val paper = Math.min(left, right)
+                    if (v < paper * 0.9f) {
+                        // The centre of the flat bottom of this dip.
+                        var a = i; var b = i
+                        while (a > 0 && profile[a - 1] <= v + (paper - v) * 0.15f) a--
+                        while (b < samples - 1 && profile[b + 1] <= v + (paper - v) * 0.15f) b++
+                        val centre = start - (a + b) / 2.0 * step
+                        if (dips.isEmpty() || dips.last() - centre > 0.004) dips += centre
+                        i = b
+                    }
+                }
+                i++
+            }
+            // Each line is about 1 % further out than the previous one (half that for the edge line);
+            // the first sits 3 % beyond the content, more where the printer stretches.
+            var lastLine = 0.11
+            var minGap = 0.015
+            var maxGap = 0.075
+            var n = 0
+            for (centre in dips) {
+                val gap = lastLine - centre
+                if (gap > minGap && gap < maxGap) { n++; lastLine = centre; minGap = 0.0045; maxGap = 0.017 }
+            }
+            return n
+        }
+        val out = FloatArray(4)
+        for (side in 0 until 4) {
+            val w = white(side)
+            if (w < 60f) return null
+            val counts = clear.map { count(side, it, w) }.sorted()
+            val n = counts[counts.size / 2]
+            // n lines seen: the first whole rectangle is 9 - n (9 lines when the edge line shows).
+            out[side] = if (n >= 9) 0f else Math.max(0f, (8 - n) + 0.5f)
+        }
+        return out
+    }
+
     /** Inverse of a 3×3 homography. */
     fun invert(h: DoubleArray): DoubleArray {
         val a = h[0]; val b = h[1]; val c = h[2]; val d = h[3]; val e = h[4]; val f = h[5]; val g = h[6]; val hh = h[7]; val i = h[8]

@@ -1992,14 +1992,13 @@ class MainActivity : Activity() {
         applyGeometry()
     }
 
-    /** A measured calibration (and geometry, if measured) becomes the current film's, saved and shown everywhere. */
-    internal fun applyMeasuredCalibration(model: FilmModel, geo: FloatArray?) {
+    /** A measured calibration (and geometry and ring, if read) becomes the current film's, saved and shown everywhere. */
+    internal fun applyMeasuredCalibration(model: FilmModel, geo: FloatArray?, ring: FloatArray? = null) {
         film = model
         film.save(prefs)
-        if (geo != null) {
-            geometry.set(geo)
-            geometry.save(prefs)
-        }
+        if (geo != null) geometry.set(geo)
+        if (ring != null) geometry.setCuts(ring)
+        if (geo != null || ring != null) geometry.save(prefs)
         syncCalibration()
         applyFilmModel()
         refreshChart()

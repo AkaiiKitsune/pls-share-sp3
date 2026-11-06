@@ -73,6 +73,11 @@ class PrinterGeometry(
         if (measured.size >= 4) { stepLeft = TestChart.contentToFile(measured[2]); patchRight = TestChart.contentToFile(measured[3]) }
     }
 
+    /** Set the cuts from a ring reading (top, bottom, left, right), in percent of the file. */
+    fun setCuts(ringPercent: FloatArray) {
+        cutTop = ringPercent[0] / 100f; cutBottom = ringPercent[1] / 100f; cutLeft = ringPercent[2] / 100f; cutRight = ringPercent[3] / 100f
+    }
+
     /** Whether anything was measured; without a measurement the map is the identity and nothing is shown or warped. */
     val measured: Boolean get() = Math.abs(stepTop - STEP_TOP_FILE) > 1e-4f || Math.abs(gradientBottom - GRADIENT_BOTTOM_FILE) > 1e-4f ||
         Math.abs(stepLeft - STEP_LEFT_FILE) > 1e-4f || Math.abs(patchRight - PATCH_RIGHT_FILE) > 1e-4f

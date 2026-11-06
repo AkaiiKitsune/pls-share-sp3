@@ -94,6 +94,8 @@ class MeasureScreen(private val activity: MainActivity) {
     private lateinit var measureColourCompare: ImageView
     private var measuredFilm: FilmModel? = null
     private var measuredGeometry: FloatArray? = null
+    /** What the frame hides on each side (top, bottom, left, right), in percent of the file, read on the ring. */
+    private var measuredRing: FloatArray? = null
     private lateinit var measureWarped: ImageView
     private var shootUri: Uri? = null
 
@@ -486,20 +488,26 @@ class MeasureScreen(private val activity: MainActivity) {
                     val n = if (geometries.count { it.size >= 4 } >= maxOf(1, geometries.size / 2)) 4 else 2
                     FloatArray(n) { c -> geometries.filter { it.size > c }.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
                 }
-                Triple(reading, ChartReader.fit(reading, type), geo)
+                // The framing ring, the median of the photos on each side.
+                val rings = entries.mapNotNull { runCatching { ChartReader.readRing(it.bitmap, it.corners!!) }.getOrNull() }
+                val ring = if (rings.isEmpty()) null else FloatArray(4) { c -> rings.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+                Measured(reading, ChartReader.fit(reading, type), geo, ring)
             }
             mainHandler.post {
                 activity.setBusy(false)
-                result.onSuccess { (reading, fit, geo) ->
+                result.onSuccess { (reading, fit, geo, ring) ->
                     val model = fit.model
                     measuredFilm = model
                     measuredGeometry = geo
+                    measuredRing = ring
                     markPanel.visibility = View.GONE
                     syncMeasureButtons()
                     updateRectified()
                     val count = entries.size
-                    val geoText = geo?.let { g -> "\n" + s.measureGeometry.format(describeGeometry(s, PrinterGeometry().apply { set(g) })) } ?: ""
-                    measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText
+                    val measuredGeo = PrinterGeometry().apply { geo?.let { set(it) }; ring?.let { setCuts(it) } }
+                    val geoText = if (geo != null || ring != null) "\n" + s.measureGeometry.format(describeGeometry(s, measuredGeo)) else ""
+                    val ringText = if (ring == null) "\n" + s.measureRingNone else ""
+                    measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText + ringText
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
                     val colour = !type.monochrome && reading.patches.isNotEmpty()
                     measureColourBox.visibility = if (colour) View.VISIBLE else View.GONE
@@ -508,8 +516,9 @@ class MeasureScreen(private val activity: MainActivity) {
                         measureColourCompare.setImageBitmap(patchStrip(reading, model))
                     }
                     measureResultBox.visibility = View.VISIBLE
-                    activity.journal("chart measured: greys %.1f %%, colours %.1f -> %.1f %%, hues %s, paper white %s".format(
-                        fit.greyRms, fit.colourRmsBefore, fit.colourRmsAfter, describeHues(s, model), reading.paperWhite.joinToString { Math.round(it).toString() }))
+                    activity.journal("chart measured: greys %.1f %%, colours %.1f -> %.1f %%, hues %s, paper white %s, geometry %s, ring %s".format(
+                        fit.greyRms, fit.colourRmsBefore, fit.colourRmsAfter, describeHues(s, model), reading.paperWhite.joinToString { Math.round(it).toString() },
+                        geo?.joinToString { "%.3f".format(it) } ?: "none", ring?.joinToString { "%.1f".format(it) } ?: "none"))
                 }.onFailure { activity.message(s.measureFailed.format(it.message ?: it.javaClass.simpleName)) }
             }
         }.start()
@@ -557,7 +566,10 @@ class MeasureScreen(private val activity: MainActivity) {
 
     private fun applyMeasured() {
         val model = measuredFilm ?: return
-        activity.applyMeasuredCalibration(model, measuredGeometry)
+        activity.applyMeasuredCalibration(model, measuredGeometry, measuredRing)
     }
+
+    /** Everything one measurement yields. */
+    private data class Measured(val reading: ChartReader.Reading, val fit: ChartReader.Fit, val geometry: FloatArray?, val ring: FloatArray?)
 
 }
