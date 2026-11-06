@@ -582,8 +582,10 @@ class MeasureScreen(private val activity: MainActivity) {
                 }
                 val rings = entries.mapNotNull { it.ring }
                 val ring = if (rings.isEmpty()) null else FloatArray(4) { c -> rings.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
-                val cards = entries.mapNotNull { it.card }
-                val card = if (cards.isEmpty()) null else FloatArray(8) { c -> cards.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+                // One photo's card, whole, rather than a mix of coordinates: the photo whose rotation
+                // is the median, after dropping the photos whose card looks wrong (keystone beyond
+                // 3 %, or rotation more than 0.4° from the others).
+                val card = chooseCard(entries.mapNotNull { it.card })
                 Measured(reading, ChartReader.fit(reading, type), geo, ring, card)
             }
             mainHandler.post {
@@ -603,7 +605,8 @@ class MeasureScreen(private val activity: MainActivity) {
                     val ringText = if (ring == null) "\n" + s.measureRingNone else ""
                     measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText + ringText
                     val found = entries.count { it.card != null }
-                    measureCardReport.text = if (found == 0) s.measureCardNone else s.measureCardFound.format(found, count)
+                    val perPhoto = entries.mapNotNull { it.card }.map { PrinterGeometry().apply { this.card = it }.rotationDegrees }
+                    measureCardReport.text = if (found == 0) s.measureCardNone else s.measureCardFound.format(found, count) + "\n" + s.measureCardRotations.format(perPhoto.joinToString(", ") { "%+.2f°".format(it) })
                     updateCardView()
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
                     val colour = !type.monochrome && reading.patches.isNotEmpty()
@@ -665,6 +668,23 @@ class MeasureScreen(private val activity: MainActivity) {
     private fun applyMeasured() {
         val model = measuredFilm ?: return
         activity.applyMeasuredCalibration(model, measuredGeometry, measuredRing, measuredCard)
+    }
+
+    /**
+     * The card to keep out of those measured on the photos: whole, from one photo (a mix of
+     * coordinates from several photos is no card at all), the one whose rotation is the median
+     * once the implausible ones are dropped: a keystone beyond 3 %, or a rotation more than 0.4°
+     * from the median of the others.
+     */
+    private fun chooseCard(cards: List<FloatArray>): FloatArray? {
+        if (cards.isEmpty()) return null
+        fun geometry(c: FloatArray) = PrinterGeometry().apply { card = c }
+        var kept = cards.filter { Math.abs(geometry(it).keystone) <= 0.03f }
+        if (kept.isEmpty()) kept = cards
+        val rotations = kept.map { geometry(it).rotationDegrees }.sorted()
+        val median = rotations[rotations.size / 2]
+        val close = kept.filter { Math.abs(geometry(it).rotationDegrees - median) <= 0.4f }
+        return close.minByOrNull { Math.abs(geometry(it).rotationDegrees - median) }
     }
 
     /** Everything one measurement yields. */

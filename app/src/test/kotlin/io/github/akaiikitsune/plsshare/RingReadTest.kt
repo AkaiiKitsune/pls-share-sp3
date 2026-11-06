@@ -64,7 +64,9 @@ class RingReadTest {
         }
         // Backgrounds close to paper (brushed steel) hide the edges; the others find them.
         assertTrue("cards found: ${cards.size}", cards.size >= 3)
-        val median = FloatArray(8) { c -> cards.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+        // The photo whose rotation is the median, whole.
+        val rotations = cards.map { PrinterGeometry().apply { card = it }.rotationDegrees }.sorted()
+        val median = cards.first { PrinterGeometry().apply { card = it }.rotationDegrees == rotations[rotations.size / 2] }
         val g = PrinterGeometry().apply { card = median; setCuts(floatArrayOf(3f, 0f, 1.5f, 0.5f)) }
         // This print is turned about half a degree clockwise, printed about 64 mm wide, and the window measures about 62 mm.
         assertEquals(0.5f, g.rotationDegrees, 0.3f)
