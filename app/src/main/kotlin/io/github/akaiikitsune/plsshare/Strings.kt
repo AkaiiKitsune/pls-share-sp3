@@ -216,7 +216,7 @@ class Strings private constructor(private val fr: Boolean) {
     )
     val measurePick get() = t("Choisir une photo", "Choose a photo")
     val measureShoot get() = t("Photographier", "Take a photo")
-    val measureHint get() = t("Touchez les quatre coins de la zone image (pas du cadre), dans l'ordre : haut gauche, haut droit, bas droit, bas gauche. Faites glisser un repère pour l'ajuster. Lumière du jour, sans reflet, le cadre blanc entièrement visible.", "Tap the four corners of the image area (not the frame), in order: top left, top right, bottom right, bottom left. Drag a marker to adjust it. Daylight, no glare, the white frame fully visible.")
+    val measureHint get() = t("Les coins sont placés automatiquement d'après la grille de couleurs : vérifiez-les à la loupe en faisant glisser un repère. Sinon, touchez les quatre coins de la zone image (pas du cadre), dans l'ordre : haut gauche, haut droit, bas droit, bas gauche. Lumière du jour, sans reflet, le cadre blanc entièrement visible.", "The corners are placed automatically from the colour grid: check them with the loupe by dragging a marker. Otherwise tap the four corners of the image area (not the frame), in order: top left, top right, bottom right, bottom left. Daylight, no glare, the white frame fully visible.")
     val measureReset get() = t("Recommencer", "Start over")
     val measureRun get() = t("Mesurer", "Measure")
     val measureResult get() = t("Résultat : %s. En haut les gris mesurés sur le tirage, en bas ceux que simule le nouveau modèle.", "Result: %s. Top: the greys measured on the print; bottom: the greys the new model simulates.")

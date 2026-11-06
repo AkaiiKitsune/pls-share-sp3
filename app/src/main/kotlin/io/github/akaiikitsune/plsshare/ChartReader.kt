@@ -174,15 +174,263 @@ object ChartReader {
     }
 
     /**
-     * Find the image area of the printed chart in a photo, without any tap.
+     * Find the image area of the printed chart in a photo, without any tap: on the colour chart
+     * from its grid of patches ([detectFromGrid]), otherwise from the corner marks ([detectFromMarks]).
+     */
+    fun detectCorners(photo: Bitmap, type: FilmType): FloatArray? =
+        (if (type.monochrome) null else runCatching { detectFromGrid(photo) }.getOrNull()) ?: detectFromMarks(photo)
+
+    // ------------------------------------------------------------ Detection from the colour grid
+
+    /** A uniform patch of colour in the (downscaled) photo. */
+    private class Blob(val cx: Float, val cy: Float, val area: Int, val r: Float, val g: Float, val b: Float) {
+        val hsv = FloatArray(3).also { FilmModel.rgbToHsv(r, g, b, it) }
+        val hue get() = hsv[0]
+        val sat get() = hsv[1]
+        val value get() = hsv[2]
+    }
+
+    /**
+     * Uniform blobs: pixels whose neighbourhood is flat, grown into regions of one colour. Textured
+     * backgrounds break up, the chart's patches and steps come out whole; the white of the chart
+     * and frame forms one huge region that the size limit drops.
+     */
+    private fun findBlobs(photo: Bitmap): Pair<List<Blob>, Int> {
+        val scale = maxOf(1, maxOf(photo.width, photo.height) / 600)
+        val w = photo.width / scale
+        val h = photo.height / scale
+        val full = IntArray(photo.width * photo.height)
+        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
+        // Box-averaged downscale: also tames sensor noise and JPEG grain.
+        val r = IntArray(w * h); val g = IntArray(w * h); val b = IntArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            var sr = 0; var sg = 0; var sb = 0
+            for (dy in 0 until scale) for (dx in 0 until scale) {
+                val c = full[(y * scale + dy) * photo.width + x * scale + dx]
+                sr += Color.red(c); sg += Color.green(c); sb += Color.blue(c)
+            }
+            val n = scale * scale
+            r[y * w + x] = sr / n; g[y * w + x] = sg / n; b[y * w + x] = sb / n
+        }
+        fun diff(i: Int, j: Int) = maxOf(Math.abs(r[i] - r[j]), Math.abs(g[i] - g[j]), Math.abs(b[i] - b[j]))
+        val flat = BooleanArray(w * h)
+        val reach = 2
+        for (y in reach until h - reach) for (x in reach until w - reach) {
+            val i = y * w + x
+            flat[i] = diff(i, i - reach) < 14 && diff(i, i + reach) < 14 && diff(i, i - reach * w) < 14 && diff(i, i + reach * w) < 14
+        }
+        val label = IntArray(w * h)
+        val queue = IntArray(w * h)
+        val blobs = ArrayList<Blob>()
+        val maxArea = w * h / 12
+        var next = 0
+        for (start in 0 until w * h) {
+            if (!flat[start] || label[start] != 0) continue
+            next++
+            label[start] = next
+            var head = 0; var tail = 0
+            queue[tail++] = start
+            var sr = 0L; var sg = 0L; var sb = 0L; var sx = 0L; var sy = 0L; var n = 0
+            var minX = w; var maxX = 0; var minY = h; var maxY = 0
+            while (head < tail) {
+                val i = queue[head++]
+                n++; sr += r[i]; sg += g[i]; sb += b[i]
+                val x = i % w; val y = i / w
+                sx += x; sy += y
+                if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y
+                for (j in intArrayOf(if (x > 0) i - 1 else -1, if (x < w - 1) i + 1 else -1, if (y > 0) i - w else -1, if (y < h - 1) i + w else -1)) {
+                    if (j < 0 || !flat[j] || label[j] != 0) continue
+                    // Grow only into the same colour: the region's running mean against the pixel.
+                    if (Math.abs(r[j] - sr / n) > 24 || Math.abs(g[j] - sg / n) > 24 || Math.abs(b[j] - sb / n) > 24) continue
+                    label[j] = next
+                    queue[tail++] = j
+                }
+            }
+            if (n < 25 || n > maxArea) continue
+            val bw = maxX - minX + 1; val bh = maxY - minY + 1
+            val fill = n.toFloat() / (bw * bh)
+            val aspect = bw.toFloat() / bh
+            if (fill < 0.7f || aspect < 0.45f || aspect > 2.6f) continue
+            blobs += Blob(sx.toFloat() / n, sy.toFloat() / n, n, sr.toFloat() / n, sg.toFloat() / n, sb.toFloat() / n)
+        }
+        return blobs to scale
+    }
+
+    /** The centres of the 16 patches as fractions of the chart (column, row). */
+    private fun patchCentre(col: Int, row: Int): DoubleArray {
+        val margin = 0.04; val cell = 0.92 / 4; val gridTop = margin + 0.14 + 0.04
+        return doubleArrayOf(margin + (col + 0.5) * cell, gridTop + (row + 0.5) * cell * 0.75)
+    }
+
+    /**
+     * Align the chart on its colour grid: the red, green, magenta and yellow patches (the top-left
+     * 2×2 block, four hues nothing else on the chart has) anchor a first homography, every other
+     * patch found near its predicted place refines it by least squares, and the image corners
+     * follow from the chart's geometry. Backgrounds, lighting and perspective do not matter as long
+     * as the patches read as uniform rectangles.
+     */
+    fun detectFromGrid(photo: Bitmap): FloatArray? {
+        val (blobs, scale) = findBlobs(photo)
+        if (blobs.size < 4) return null
+        fun hueIn(b: Blob, from: Float, to: Float) = if (from <= to) b.hue in from..to else (b.hue >= from || b.hue <= to)
+        val reds = blobs.filter { hueIn(it, 335f, 18f) && it.sat >= 0.4f && it.value >= 0.25f }
+        val greens = blobs.filter { hueIn(it, 95f, 175f) && it.sat >= 0.3f }
+        val magentas = blobs.filter { hueIn(it, 285f, 340f) && it.sat >= 0.35f }
+        val yellows = blobs.filter { hueIn(it, 35f, 75f) && it.sat >= 0.45f && it.value >= 0.5f }
+        val side = minOf(photo.width, photo.height) / scale
+        // Anchors: the red patch plus at least two of green (one column right), magenta (one row
+        // down) and yellow (both). Each partner gives the grid's column pitch, from which the row
+        // pitch follows (a quarter turn, three quarters of the length); the hypothesis that the
+        // other partners confirm best wins. Glare may hide one patch, so three anchors are enough.
+        fun dist(a: Blob, x: Float, y: Float) = Math.hypot((a.cx - x).toDouble(), (a.cy - y).toDouble()).toFloat()
+        var best: Map<Int, Blob>? = null   // key: col + 2 * row within the 2×2 block
+        var bestScore = Float.MAX_VALUE
+        for (red in reds) {
+            val hypotheses = ArrayList<FloatArray>() // column pitch (dx, dy)
+            for (green in greens) hypotheses += floatArrayOf(green.cx - red.cx, green.cy - red.cy)
+            for (magenta in magentas) { val dx = magenta.cx - red.cx; val dy = magenta.cy - red.cy; hypotheses += floatArrayOf(dy / 0.75f, -dx / 0.75f) }
+            for (yellow in yellows) {
+                // v = d + R(d)·0.75 with R(dx, dy) = (−dy, dx): v = (dx − 0.75 dy, dy + 0.75 dx).
+                val vx = yellow.cx - red.cx; val vy = yellow.cy - red.cy
+                val det = 1f + 0.75f * 0.75f
+                hypotheses += floatArrayOf((vx + 0.75f * vy) / det, (vy - 0.75f * vx) / det)
+            }
+            for (d in hypotheses) {
+                val len = Math.hypot(d[0].toDouble(), d[1].toDouble()).toFloat()
+                if (len < side * 0.04f || len > side * 0.6f) continue
+                val downX = -d[1] * 0.75f; val downY = d[0] * 0.75f
+                val found = HashMap<Int, Blob>()
+                found[0] = red
+                var score = 0f
+                fun take(key: Int, list: List<Blob>, px: Float, py: Float) {
+                    val cand = list.filter { it.area > red.area * 0.4f && it.area < red.area * 2.5f }.minByOrNull { dist(it, px, py) } ?: return
+                    val dd = dist(cand, px, py)
+                    if (dd < len * 0.3f) { found[key] = cand; score += dd / len }
+                }
+                take(1, greens, red.cx + d[0], red.cy + d[1])
+                take(2, magentas, red.cx + downX, red.cy + downY)
+                take(3, yellows, red.cx + d[0] + downX, red.cy + d[1] + downY)
+                if (found.size < 3) continue
+                // More anchors first, then the tighter fit.
+                val total = score / (found.size - 1) - found.size
+                if (total < bestScore) { bestScore = total; best = found }
+            }
+        }
+        val anchors = best ?: return null
+        val norm = maxOf(photo.width, photo.height).toFloat() / scale
+        val red = anchors[0]!!
+        // First alignment from the anchors (an affine map when only three are known).
+        val srcA = anchors.keys.sorted().map { patchCentre(it % 2, it / 2) }
+        val dstA = anchors.keys.sorted().map { doubleArrayOf((anchors[it]!!.cx / norm).toDouble(), (anchors[it]!!.cy / norm).toDouble()) }
+        var hm = if (anchors.size == 4) {
+            homographyFrom(srcA.flatMap { it.toList() }.toDoubleArray(), dstA.flatMap { it.toList() }.map { it.toFloat() }.toFloatArray())
+        } else {
+            affineHomography(srcA, dstA)
+        }
+        // Refinement: every patch found near its predicted centre joins the fit.
+        val pitch = run {
+            val a = map(hm, patchCentre(0, 0)[0], patchCentre(0, 0)[1]); val b = map(hm, patchCentre(1, 0)[0], patchCentre(1, 0)[1])
+            (Math.hypot(a[0] - b[0], a[1] - b[1]) * norm).toFloat()
+        }
+        val matched = ArrayList<Pair<DoubleArray, Blob>>()
+        for (row in 0 until 4) for (col in 0 until 4) {
+            val c = patchCentre(col, row)
+            val p = map(hm, c[0], c[1])
+            val px = (p[0] * norm).toFloat(); val py = (p[1] * norm).toFloat()
+            val blob = blobs.filter { it.area > red.area * 0.4f && it.area < red.area * 2.5f }.minByOrNull { dist(it, px, py) } ?: continue
+            if (dist(blob, px, py) > pitch * 0.25f) continue
+            matched += c to blob
+        }
+        if (matched.size >= 6) {
+            hm = leastSquaresHomography(matched.map { it.first }, matched.map { doubleArrayOf((it.second.cx / norm).toDouble(), (it.second.cy / norm).toDouble()) })
+        } else if (anchors.size < 4) {
+            return null
+        }
+        val corners = FloatArray(8)
+        for ((idx, c) in listOf(0.0 to 0.0, 1.0 to 0.0, 1.0 to 1.0, 0.0 to 1.0).withIndex()) {
+            val p = map(hm, c.first, c.second)
+            corners[2 * idx] = (p[0] * norm * scale).toFloat(); corners[2 * idx + 1] = (p[1] * norm * scale).toFloat()
+        }
+        for (v in corners) if (v.isNaN()) return null
+        return if (validateGreys(photo, corners)) corners else null
+    }
+
+    /** The grey steps, read with these corners, must run from dark to light in order. */
+    private fun validateGreys(photo: Bitmap, corners: FloatArray): Boolean {
+        val h = homography(corners)
+        val full = IntArray(photo.width * photo.height)
+        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
+        val stepW = 0.92 / 11
+        val steps = (0 until 11).map { i ->
+            val p = map(h, 0.04 + (i + 0.5) * stepW, 0.11)
+            val c = sample(full, photo.width, photo.height, p[0], p[1])
+            (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f
+        }
+        if (steps[10] < steps[0] * 2.5f) return false
+        for (i in 1 until 11) if (steps[i] < steps[i - 1] - 12f) return false
+        return true
+    }
+
+    /** The affine map through three correspondences, as a homography (h6 = h7 = 0). */
+    fun affineHomography(src: List<DoubleArray>, dst: List<DoubleArray>): DoubleArray {
+        // Solve [x y 1] · (a b c) = u and (d e f) = v for the three points.
+        val m = Array(3) { i -> doubleArrayOf(src[i][0], src[i][1], 1.0, dst[i][0], dst[i][1]) }
+        for (col in 0 until 3) {
+            var pivot = col
+            for (r in col + 1 until 3) if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r
+            val tmp = m[col]; m[col] = m[pivot]; m[pivot] = tmp
+            val p = m[col][col]
+            if (Math.abs(p) < 1e-12) continue
+            for (c in col until 5) m[col][c] /= p
+            for (r in 0 until 3) if (r != col) {
+                val f = m[r][col]
+                if (f != 0.0) for (c in col until 5) m[r][c] -= f * m[col][c]
+            }
+        }
+        return doubleArrayOf(m[0][3], m[1][3], m[2][3], m[0][4], m[1][4], m[2][4], 0.0, 0.0, 1.0)
+    }
+
+    /** Homography fitting n ≥ 4 correspondences by least squares (normal equations of the DLT with h8 = 1). */
+    fun leastSquaresHomography(src: List<DoubleArray>, dst: List<DoubleArray>): DoubleArray {
+        val ata = Array(8) { DoubleArray(8) }
+        val atb = DoubleArray(8)
+        for (i in src.indices) {
+            val x = src[i][0]; val y = src[i][1]; val u = dst[i][0]; val v = dst[i][1]
+            val rows = listOf(doubleArrayOf(x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y) to u, doubleArrayOf(0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y) to v)
+            for ((row, rhs) in rows) {
+                for (a in 0 until 8) { for (b in 0 until 8) ata[a][b] += row[a] * row[b]; atb[a] += row[a] * rhs }
+            }
+        }
+        // Solve the 8×8 system.
+        val m = Array(8) { i -> DoubleArray(9) { j -> if (j < 8) ata[i][j] else atb[i] } }
+        for (col in 0 until 8) {
+            var pivot = col
+            for (r in col + 1 until 8) if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r
+            val tmp = m[col]; m[col] = m[pivot]; m[pivot] = tmp
+            val p = m[col][col]
+            if (Math.abs(p) < 1e-12) continue
+            for (c in col until 9) m[col][c] /= p
+            for (r in 0 until 8) if (r != col) {
+                val f = m[r][col]
+                if (f != 0.0) for (c in col until 9) m[r][c] -= f * m[col][c]
+            }
+        }
+        return DoubleArray(9) { if (it < 8) m[it][8] else 1.0 }
+    }
+
+    // ------------------------------------------------------------ Detection from the corner marks
+
+    /**
+     * Find the image area from the four corner marks.
      *
      * The print is the bright region; everything dark that it encloses (the grey steps, the
      * patches, the gradient, the corner marks) forms "holes" in it. The extreme hole pixels in the
-     * four diagonal directions are the outer corners of the corner marks, hence of the image area.
-     * Returns null when the four marks are not found there (a chart printed before the marks
+     * four diagonal directions are the outer corners of the corner marks, printed a little inside
+     * the image area (the frame hides its very edge); their known positions align the whole chart.
+     * Returns null when no convincing chart is found there (a chart printed before the marks
      * existed, a dark object on the table, glare): the user then taps the corners.
      */
-    fun detectCorners(photo: Bitmap, type: FilmType): FloatArray? {
+    fun detectFromMarks(photo: Bitmap): FloatArray? {
         val scale = maxOf(1, maxOf(photo.width, photo.height) / 500)
         val w = photo.width / scale
         val h = photo.height / scale
@@ -257,23 +505,55 @@ object ChartReader {
             val len = Math.hypot((quad[2 * n] - quad[2 * k]).toDouble(), (quad[2 * n + 1] - quad[2 * k + 1]).toDouble())
             if (len < side * 0.15) return null
         }
-        // With corner marks, the quad is the image area: all four corner marks must read dark.
-        val hq = homography(quad)
-        fun darkAt(x: Double, y: Double): Boolean {
-            val p = map(hq, x, y)
+        // The quad joins the outer corners of the four marks, which sit at known positions inside
+        // the image area: the homography from those positions gives the whole chart's alignment.
+        val k = TestChart.FIDUCIAL_INSET.toDouble()
+        val known = doubleArrayOf(k, k, 1 - k, k, 1 - k, 1 - k, k, 1 - k)
+        val hk = homographyFrom(known, quad)
+        fun lumaAt(x: Double, y: Double): Float {
+            val p = map(hk, x, y)
             val c = sample(full, photo.width, photo.height, p[0], p[1])
-            return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000 < paper * 0.5f
+            return (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f / paper
         }
-        val f = TestChart.FIDUCIAL / 2.0
-        val marks = listOf(f to f, 1 - f to f, 1 - f to 1 - f, f to 1 - f).count { (x, y) -> darkAt(x, y) }
-        // …and they must be small squares in a white margin, not the corners of larger dark areas
-        // (the black step, a patch): just beside each mark, along both edges, it is white.
-        val beside = TestChart.FIDUCIAL * 1.7
-        val margins = listOf(
-            beside to f, f to beside, 1 - beside to f, 1 - f to beside,
-            1 - beside to 1 - f, 1 - f to 1 - beside, beside to 1 - f, f to 1 - beside,
-        ).count { (x, y) -> !darkAt(x, y) }
-        return if (marks == 4 && margins == 8) quad else null
+        // Validation: the four marks read dark, and the grey steps run from dark to light in order,
+        // which a dark object on the table or a chart printed without marks will not satisfy.
+        val fc = (TestChart.FIDUCIAL_INSET + TestChart.FIDUCIAL / 2).toDouble()
+        val marks = listOf(fc to fc, 1 - fc to fc, 1 - fc to 1 - fc, fc to 1 - fc).count { (x, y) -> lumaAt(x, y) < 0.5f }
+        if (marks != 4) return null
+        val stepW = 0.92 / 11
+        val steps = (0 until 11).map { i -> lumaAt(0.04 + (i + 0.5) * stepW, 0.11) }
+        if (steps[0] > 0.45f || steps[10] < 0.8f) return null
+        for (i in 1 until 11) if (steps[i] < steps[i - 1] - 0.04f) return null
+        val corners = FloatArray(8)
+        for ((idx, c) in listOf(0.0 to 0.0, 1.0 to 0.0, 1.0 to 1.0, 0.0 to 1.0).withIndex()) {
+            val p = map(hk, c.first, c.second)
+            corners[2 * idx] = p[0].toFloat(); corners[2 * idx + 1] = p[1].toFloat()
+        }
+        return corners
+    }
+
+    /** Solve the homography that maps four source points (x0,y0,…) to four destination points. */
+    fun homographyFrom(src: DoubleArray, dst: FloatArray): DoubleArray {
+        val a = Array(8) { DoubleArray(9) }
+        for (i in 0 until 4) {
+            val x = src[2 * i]; val y = src[2 * i + 1]
+            val u = dst[2 * i].toDouble(); val v = dst[2 * i + 1].toDouble()
+            a[2 * i] = doubleArrayOf(x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y, u)
+            a[2 * i + 1] = doubleArrayOf(0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y, v)
+        }
+        for (col in 0 until 8) {
+            var pivot = col
+            for (r in col + 1 until 8) if (Math.abs(a[r][col]) > Math.abs(a[pivot][col])) pivot = r
+            val tmp = a[col]; a[col] = a[pivot]; a[pivot] = tmp
+            val p = a[col][col]
+            if (Math.abs(p) < 1e-12) continue
+            for (c in col until 9) a[col][c] /= p
+            for (r in 0 until 8) if (r != col) {
+                val f = a[r][col]
+                if (f != 0.0) for (c in col until 9) a[r][c] -= f * a[col][c]
+            }
+        }
+        return DoubleArray(9) { if (it < 8) a[it][8] else 1.0 }
     }
 
     /** A fitted model with its errors, in percent of paper white (RMS over the steps or patches, per channel). */

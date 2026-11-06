@@ -47,7 +47,7 @@ class ChartDetectTest {
     fun `corner marks are found under perspective`() {
         val wanted = floatArrayOf(210f, 250f, 790f, 230f, 820f, 900f, 180f, 880f)
         for (type in FilmType.values()) {
-            val found = ChartReader.detectCorners(photo(type, true, wanted), type)
+            val found = ChartReader.detectFromMarks(photo(type, true, wanted))
             println("$type marks: ${found?.joinToString { "%.0f".format(it) }}")
             check(found, wanted, 10f, "$type")
         }
@@ -56,10 +56,10 @@ class ChartDetectTest {
     @Test
     fun `a chart without marks is not mistaken for one`() {
         val wanted = floatArrayOf(210f, 250f, 790f, 230f, 820f, 900f, 180f, 880f)
-        assertNull(ChartReader.detectCorners(photo(FilmType.COLOR, false, wanted), FilmType.COLOR))
-        // The real photos predate the marks: no false positive there either.
+        assertNull(ChartReader.detectFromMarks(photo(FilmType.COLOR, false, wanted)))
+        // The real photos predate the marks: the marks method finds nothing there either.
         val photo = javaClass.getResourceAsStream("/chart-daylight.jpg")!!.use { BitmapFactory.decodeStream(it)!! }
-        assertNull(ChartReader.detectCorners(photo, FilmType.COLOR))
+        assertNull(ChartReader.detectFromMarks(photo))
     }
 
     @Test

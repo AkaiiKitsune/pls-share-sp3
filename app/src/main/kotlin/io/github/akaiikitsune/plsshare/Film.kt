@@ -695,8 +695,10 @@ class FilmModel(
 
 /** Test charts to print once and compare with the screen. */
 object TestChart {
-    /** Side of the black squares printed in the four corners of the image area, as a fraction of the chart. */
+    /** Side of the black squares printed near the four corners of the image area, as a fraction of the chart. */
     const val FIDUCIAL = 0.03f
+    /** Distance of the squares from the image edges: the instax frame hides a sliver of the image. */
+    const val FIDUCIAL_INSET = 0.03f
 
     fun render(size: Int, type: FilmType, fiducials: Boolean = true): Bitmap =
         (if (type.monochrome) renderMono(size) else render(size)).also { if (fiducials) drawFiducials(it) }
@@ -708,12 +710,13 @@ object TestChart {
     private fun drawFiducials(bitmap: Bitmap) {
         val size = bitmap.width.toFloat()
         val f = size * FIDUCIAL
+        val i = size * FIDUCIAL_INSET
         val canvas = Canvas(bitmap)
         val paint = Paint().apply { color = Color.BLACK }
-        canvas.drawRect(0f, 0f, f, f, paint)
-        canvas.drawRect(size - f, 0f, size, f, paint)
-        canvas.drawRect(size - f, size - f, size, size, paint)
-        canvas.drawRect(0f, size - f, f, size, paint)
+        canvas.drawRect(i, i, i + f, i + f, paint)
+        canvas.drawRect(size - i - f, i, size - i, i + f, paint)
+        canvas.drawRect(size - i - f, size - i - f, size - i, size - i, paint)
+        canvas.drawRect(i, size - i - f, i + f, size - i, paint)
     }
 
     /** Monochrome chart: coarse and fine grey scales, a few luminance patches, a continuous gradient. */
