@@ -2,6 +2,7 @@ package io.github.akaiikitsune.plsshare
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -41,8 +42,79 @@ class GeometryTest {
         // Through set(), the geometry's stretch is the content's.
         val g = PrinterGeometry().apply { set(results[0]) }
         assertEquals((results[0][1] - results[0][0]) / 0.92f, g.stretch, 1e-3f)
-        // And show the stretch: the gradient's bottom lands lower than in the file.
-        assertTrue(results.map { it[1] }.average() > 0.965)
+        // And no stretch to speak of: the lines land where the file puts them (the top of the old
+        // chart was cut by the frame on two photos, so the median).
+        assertEquals(0.96f, results.map { it[1] }.average().toFloat(), 0.01f)
+        assertEquals(0.04f, results.map { it[0] }.sorted()[results.size / 2], 0.01f)
+    }
+
+    /** The file square rotated by [degrees] on a 72 × 86 card, as card corners in file coordinates (a similarity). */
+    private fun cardFor(degrees: Double, sideMm: Float, cx: Float, cy: Float): FloatArray {
+        val t = Math.toRadians(-degrees)
+        val cos = Math.cos(t); val sin = Math.sin(t)
+        val out = FloatArray(8)
+        for ((i, c) in listOf(0f to 0f, 72f to 0f, 72f to 86f, 0f to 86f).withIndex()) {
+            val dx = c.first - cx; val dy = c.second - cy
+            out[2 * i] = (0.5 + (cos * dx - sin * dy) / sideMm).toFloat()
+            out[2 * i + 1] = (0.5 + (sin * dx + cos * dy) / sideMm).toFloat()
+        }
+        return out
+    }
+
+    @Test
+    fun `with the card and the cuts, prints are placed whole and straight in the window`() {
+        // The file printed 64 mm wide, turned 1.5° clockwise, centred 36 mm from the left and 37 mm from the top.
+        val g = PrinterGeometry().apply { card = cardFor(1.5, 64f, 36f, 37f) }
+        assertEquals(1.5f, g.rotationDegrees, 0.02f)
+        assertEquals(0f, g.keystone, 0.002f)
+        assertEquals(64f, g.printedSizeMm[0], 0.1f); assertEquals(64f, g.printedSizeMm[1], 0.1f)
+        assertTrue(g.measured)
+        assertTrue(!g.placed) // no cuts: the window is unknown
+        g.cutTop = 0.03f; g.cutBottom = 0.005f; g.cutLeft = 0.015f; g.cutRight = 0.005f
+        assertTrue(g.placed)
+        val target = g.targetMm!!
+        assertEquals(64f * (1f - (0.02f + 0.035f) / 2), target[2], 0.3f) // the window's mean side (2 % cut across, 3.5 % down)
+        assertEquals(0f, g.hiddenTop, 0f); assertEquals(0f, g.hiddenLeft, 0f) // nothing hidden once placed
+        // Four quadrants: after the pre-warp, the file pixel that lands at a quadrant's centre in the window holds that quadrant.
+        val image = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
+        val colours = intArrayOf(Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW)
+        image.setPixels(IntArray(200 * 200) { colours[(it % 200) / 100 + 2 * (it / 200 / 100)] }, 0, 200, 0, 0, 200, 200)
+        val warped = g.prewarp(image)
+        val t = Math.toRadians(-1.5)
+        for ((i, q) in listOf(0.25f to 0.25f, 0.75f to 0.25f, 0.25f to 0.75f, 0.75f to 0.75f).withIndex()) {
+            // Window millimetres of the quadrant's centre, then back to the file position printed there.
+            val mx = target[0] + (q.first - 0.5f) * target[2]; val my = target[1] + (q.second - 0.5f) * target[2]
+            val dx = mx - 36f; val dy = my - 37f
+            val fx = 0.5 + (Math.cos(t) * dx - Math.sin(t) * dy) / 64f; val fy = 0.5 + (Math.sin(t) * dx + Math.cos(t) * dy) / 64f
+            assertEquals("quadrant $i", colours[i], warped.getPixel(Math.round(fx * 199).toInt(), Math.round(fy * 199).toInt()))
+        }
+        // Off: nothing placed, the cuts show as bands again.
+        g.compensate = false
+        assertEquals(0.03f, g.hiddenTop, 1e-4f)
+        assertTrue(g.prewarp(image) === image)
+        // Saved and loaded back.
+        val text = PrinterGeometry.cardText(g.card!!)
+        val back = PrinterGeometry.parseCard(text)!!
+        for (i in 0 until 8) assertEquals(g.card!![i], back[i], 1e-4f)
+    }
+
+    @Test
+    fun `the card's edges are measured on a synthetic print, turned and all`() {
+        // The chart printed 1000 px wide on a 1125 × 1344 px card (72 × 86 mm at 15.6 px/mm), turned 1° clockwise.
+        val chart = TestChart.render(1000, FilmType.COLOR)
+        val photo = Bitmap.createBitmap(1400, 1700, Bitmap.Config.ARGB_8888)
+        Canvas(photo).apply {
+            drawColor(Color.rgb(90, 70, 50))
+            drawRect(137f, 150f, 137f + 1125f, 150f + 1344f, android.graphics.Paint().apply { color = Color.WHITE })
+            save(); rotate(1f, 137f + 1125f / 2, 150f + 1344f / 2); drawBitmap(chart, 200f, 220f, null); restore()
+        }
+        val corners = ChartReader.detectCorners(photo, FilmType.COLOR)!!
+        val card = ChartReader.measureCard(photo, corners)!!
+        val g = PrinterGeometry().apply { this.card = card }
+        assertEquals(1f, g.rotationDegrees, 0.15f)
+        assertEquals(0f, g.keystone, 0.006f)
+        assertEquals(1000f / 1125f * 72f, g.printedSizeMm[0], 0.5f)
+        assertEquals(1000f / 1125f * 72f, g.printedSizeMm[1], 0.5f)
     }
 
     @Test

@@ -52,7 +52,8 @@ class ChartGridDetectTest {
         val found = ChartReader.detectCorners(photo, FilmType.COLOR)
         assertNotNull(found)
         val hand = floatArrayOf(639f, 1214f, 2332f, 1214f, 2332f, 2824f, 639f, 2824f)
-        for (i in 0 until 8) assertEquals("corner value $i", hand[i], found!![i], 80f)
+        // The hand-picked corners were the visible edges of an old print, which the frame cut at the bottom: loosely.
+        for (i in 0 until 8) assertEquals("corner value $i", hand[i], found!![i], 120f)
     }
 }
 

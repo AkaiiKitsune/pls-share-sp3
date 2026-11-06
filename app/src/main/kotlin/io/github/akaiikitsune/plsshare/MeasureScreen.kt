@@ -34,9 +34,17 @@ internal fun describeHues(s: Strings, model: FilmModel): String {
 
 /** The printer's geometry in a sentence, or "not measured". */
 internal fun describeGeometry(s: Strings, g: PrinterGeometry): String {
-    val stretch = if (g.measured) s.geometryStretch.format((g.stretch - 1f) * 100f, (g.stretchX - 1f) * 100f) else s.geometryNone
-    val cuts = if (g.cutsKnown) s.geometryCuts.format(g.hiddenTop * 100f, g.hiddenBottom * 100f, g.hiddenLeft * 100f, g.hiddenRight * 100f) else s.geometryCutsNone
-    return stretch + "\n" + cuts
+    val lines = ArrayList<String>()
+    if (g.card != null) {
+        val size = g.printedSizeMm
+        lines += s.geometryCard.format(size[0], size[1], g.rotationDegrees, g.keystone * 100f)
+    } else {
+        lines += if (g.linesMeasured) s.geometryStretch.format((g.stretch - 1f) * 100f, (g.stretchX - 1f) * 100f) else s.geometryNone
+    }
+    lines += if (g.cutsKnown) s.geometryCuts.format(g.cutTop * 100f, g.cutBottom * 100f, g.cutLeft * 100f, g.cutRight * 100f) else s.geometryCutsNone
+    val target = g.targetMm
+    if (target != null) lines += if (g.placed) s.geometryPlaced.format(target[2]) else s.geometryNotPlaced.format(target[2])
+    return lines.joinToString("\n")
 }
 
 /**
@@ -96,6 +104,8 @@ class MeasureScreen(private val activity: MainActivity) {
     private var measuredGeometry: FloatArray? = null
     /** What the frame hides on each side (top, bottom, left, right), in percent of the file, read on the ring. */
     private var measuredRing: FloatArray? = null
+    /** The card's corners in file coordinates, measured on the photos. */
+    private var measuredCard: FloatArray? = null
     private lateinit var measureWarped: ImageView
     private var shootUri: Uri? = null
 
@@ -488,24 +498,27 @@ class MeasureScreen(private val activity: MainActivity) {
                     val n = if (geometries.count { it.size >= 4 } >= maxOf(1, geometries.size / 2)) 4 else 2
                     FloatArray(n) { c -> geometries.filter { it.size > c }.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
                 }
-                // The framing ring, the median of the photos on each side.
+                // The framing ring, the median of the photos on each side, and the card's corners likewise.
                 val rings = entries.mapNotNull { runCatching { ChartReader.readRing(it.bitmap, it.corners!!) }.getOrNull() }
                 val ring = if (rings.isEmpty()) null else FloatArray(4) { c -> rings.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
-                Measured(reading, ChartReader.fit(reading, type), geo, ring)
+                val cards = entries.mapNotNull { runCatching { ChartReader.measureCard(it.bitmap, it.corners!!) }.getOrNull() }
+                val card = if (cards.isEmpty()) null else FloatArray(8) { c -> cards.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+                Measured(reading, ChartReader.fit(reading, type), geo, ring, card)
             }
             mainHandler.post {
                 activity.setBusy(false)
-                result.onSuccess { (reading, fit, geo, ring) ->
+                result.onSuccess { (reading, fit, geo, ring, card) ->
                     val model = fit.model
                     measuredFilm = model
                     measuredGeometry = geo
                     measuredRing = ring
+                    measuredCard = card
                     markPanel.visibility = View.GONE
                     syncMeasureButtons()
                     updateRectified()
                     val count = entries.size
-                    val measuredGeo = PrinterGeometry().apply { geo?.let { set(it) }; ring?.let { setCuts(it) } }
-                    val geoText = if (geo != null || ring != null) "\n" + s.measureGeometry.format(describeGeometry(s, measuredGeo)) else ""
+                    val measuredGeo = PrinterGeometry().apply { geo?.let { set(it) }; ring?.let { setCuts(it) }; this.card = card }
+                    val geoText = if (geo != null || ring != null || card != null) "\n" + s.measureGeometry.format(describeGeometry(s, measuredGeo)) else ""
                     val ringText = if (ring == null) "\n" + s.measureRingNone else ""
                     measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms)) + geoText + ringText
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
@@ -518,7 +531,8 @@ class MeasureScreen(private val activity: MainActivity) {
                     measureResultBox.visibility = View.VISIBLE
                     activity.journal("chart measured: greys %.1f %%, colours %.1f -> %.1f %%, hues %s, paper white %s, geometry %s, ring %s".format(
                         fit.greyRms, fit.colourRmsBefore, fit.colourRmsAfter, describeHues(s, model), reading.paperWhite.joinToString { Math.round(it).toString() },
-                        geo?.joinToString { "%.3f".format(it) } ?: "none", ring?.joinToString { "%.1f".format(it) } ?: "none"))
+                        geo?.joinToString { "%.3f".format(it) } ?: "none", ring?.joinToString { "%.1f".format(it) } ?: "none") +
+                        ", card " + (card?.joinToString { "%.3f".format(it) } ?: "none"))
                 }.onFailure { activity.message(s.measureFailed.format(it.message ?: it.javaClass.simpleName)) }
             }
         }.start()
@@ -566,10 +580,10 @@ class MeasureScreen(private val activity: MainActivity) {
 
     private fun applyMeasured() {
         val model = measuredFilm ?: return
-        activity.applyMeasuredCalibration(model, measuredGeometry, measuredRing)
+        activity.applyMeasuredCalibration(model, measuredGeometry, measuredRing, measuredCard)
     }
 
     /** Everything one measurement yields. */
-    private data class Measured(val reading: ChartReader.Reading, val fit: ChartReader.Fit, val geometry: FloatArray?, val ring: FloatArray?)
+    private data class Measured(val reading: ChartReader.Reading, val fit: ChartReader.Fit, val geometry: FloatArray?, val ring: FloatArray?, val card: FloatArray?)
 
 }

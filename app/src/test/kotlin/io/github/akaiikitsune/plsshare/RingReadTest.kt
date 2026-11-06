@@ -48,6 +48,34 @@ class RingReadTest {
     }
 
     @Test
+    fun `the card's edges give the same rotation on every photo where they show`() {
+        val cards = ArrayList<FloatArray>()
+        for (name in names) {
+            val photo = load(name)
+            val corners = ChartReader.detectCorners(photo, FilmType.COLOR)!!
+            val card = ChartReader.measureCard(photo, corners)
+            val g = PrinterGeometry().apply { this.card = card }
+            println("$name: card " + (card?.let { "rotation %.2f° keystone %+.1f %% printed %.1f × %.1f mm".format(g.rotationDegrees, g.keystone * 100, g.printedSizeMm[0], g.printedSizeMm[1]) } ?: "not found"))
+            if (card != null) cards += card
+        }
+        // Backgrounds close to paper (brushed steel) hide the edges; the others find them.
+        assertTrue("cards found: ${cards.size}", cards.size >= 3)
+        val median = FloatArray(8) { c -> cards.map { it[c] }.sorted().let { v -> v[v.size / 2] } }
+        val g = PrinterGeometry().apply { card = median; setCuts(floatArrayOf(3f, 0f, 1.5f, 0.5f)) }
+        // This print is turned about half a degree clockwise, printed about 64 mm wide, and the window measures about 62 mm.
+        assertEquals(0.5f, g.rotationDegrees, 0.3f)
+        assertTrue("keystone ${g.keystone}", Math.abs(g.keystone) < 0.03f)
+        assertEquals(64f, g.printedSizeMm[0], 2f)
+        assertEquals(64f, g.printedSizeMm[1], 3f)
+        assertTrue("placed, window ${g.targetMm?.get(2)}", g.placed)
+        assertEquals(PrinterGeometry.WINDOW_MM, g.targetMm!![2], 3f)
+        for (card in cards) {
+            val one = PrinterGeometry().apply { this.card = card }
+            assertEquals("rotation on one photo", g.rotationDegrees, one.rotationDegrees, 0.35f)
+        }
+    }
+
+    @Test
     fun `a rendered chart shows every ring line`() {
         // The chart on its white frame, as on a print that hides nothing.
         val chart = TestChart.render(1200, FilmType.COLOR)

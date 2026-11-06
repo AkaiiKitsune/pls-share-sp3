@@ -1134,7 +1134,8 @@ class MainActivity : Activity() {
         o.put("compensate", compensate)
         o.put("geometry", org.json.JSONObject().put("stepTop", geometry.stepTop.toDouble()).put("gradientBottom", geometry.gradientBottom.toDouble())
             .put("stepLeft", geometry.stepLeft.toDouble()).put("patchRight", geometry.patchRight.toDouble()).put("compensate", geometry.compensate)
-            .put("cutTop", geometry.cutTop.toDouble()).put("cutBottom", geometry.cutBottom.toDouble()).put("cutLeft", geometry.cutLeft.toDouble()).put("cutRight", geometry.cutRight.toDouble()))
+            .put("cutTop", geometry.cutTop.toDouble()).put("cutBottom", geometry.cutBottom.toDouble()).put("cutLeft", geometry.cutLeft.toDouble()).put("cutRight", geometry.cutRight.toDouble())
+            .put("card", geometry.card?.let { PrinterGeometry.cardText(it) } ?: ""))
         o.put("filmType", filmType.key)
         return o
     }
@@ -1184,6 +1185,7 @@ class MainActivity : Activity() {
                     geometry.compensate = g.optBoolean("compensate", geometry.compensate)
                     geometry.cutTop = g.optDouble("cutTop", geometry.cutTop.toDouble()).toFloat(); geometry.cutBottom = g.optDouble("cutBottom", geometry.cutBottom.toDouble()).toFloat()
                     geometry.cutLeft = g.optDouble("cutLeft", geometry.cutLeft.toDouble()).toFloat(); geometry.cutRight = g.optDouble("cutRight", geometry.cutRight.toDouble()).toFloat()
+                    if (g.has("card")) geometry.card = g.optString("card", "").takeIf { it.isNotEmpty() }?.let { PrinterGeometry.parseCard(it) }
                     geometry.save(prefs)
                 }
                 film = FilmModel.load(prefs, filmType)
@@ -1993,12 +1995,13 @@ class MainActivity : Activity() {
     }
 
     /** A measured calibration (and geometry and ring, if read) becomes the current film's, saved and shown everywhere. */
-    internal fun applyMeasuredCalibration(model: FilmModel, geo: FloatArray?, ring: FloatArray? = null) {
+    internal fun applyMeasuredCalibration(model: FilmModel, geo: FloatArray?, ring: FloatArray? = null, card: FloatArray? = null) {
         film = model
         film.save(prefs)
         if (geo != null) geometry.set(geo)
         if (ring != null) geometry.setCuts(ring)
-        if (geo != null || ring != null) geometry.save(prefs)
+        if (card != null) geometry.card = card
+        if (geo != null || ring != null || card != null) geometry.save(prefs)
         syncCalibration()
         applyFilmModel()
         refreshChart()

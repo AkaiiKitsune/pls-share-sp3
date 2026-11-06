@@ -15,6 +15,8 @@ import android.graphics.Color
 object ChartReader {
     const val SIZE = 400
     private const val PASSES = 8
+    /** Top of the gradient (content coordinates): it is drawn over the bottom of the last row of patches. */
+    const val GRADIENT_TOP = 0.86f
 
     class Reading(
         /** Normalised RGB (0..1 of paper white) of the 11 grey steps, 0 % to 100 %. */
@@ -157,7 +159,9 @@ object ChartReader {
             val col = i % 4; val row = i / 4
             val l = margin + col * cell + gap
             val t = gridTop + row * cell * 0.75f + gap
-            val rect = inner(l, t, l + cell - 2 * gap, t + cell * 0.75f - 2 * gap, 0.5f)
+            // The gradient covers the bottom of the last row: only what shows is read.
+            val b = Math.min(t + cell * 0.75f - 2 * gap, GRADIENT_TOP)
+            val rect = inner(l, t, l + cell - 2 * gap, b, 0.5f)
             norm(average(pixels, width, height, h, rect[0], rect[1], rect[2], rect[3]), rect)
         }
         // Printed white: the chart's own margin (right of the grey steps, which stop before the right edge).
@@ -287,8 +291,11 @@ object ChartReader {
 
     /** The centres of the 16 patches as fractions of the chart (column, row). */
     private fun patchCentre(col: Int, row: Int): DoubleArray {
-        val margin = 0.04; val cell = 0.92 / 4; val gridTop = margin + 0.14 + 0.04
-        return doubleArrayOf(margin + (col + 0.5) * cell, gridTop + (row + 0.5) * cell * 0.75)
+        val margin = 0.04; val cell = 0.92 / 4; val gridTop = margin + 0.14 + 0.04; val gap = 0.012
+        // The centre of what shows: the gradient covers the bottom of the last row.
+        val top = gridTop + row * cell * 0.75 + gap
+        val bottom = Math.min(top + cell * 0.75 - 2 * gap, GRADIENT_TOP.toDouble())
+        return doubleArrayOf(margin + (col + 0.5) * cell, (top + bottom) / 2)
     }
 
     /**
@@ -603,6 +610,84 @@ object ChartReader {
             out[side] = if (n >= 9) 0f else Math.max(0f, (8 - n) + 0.5f)
         }
         return out
+    }
+
+    /**
+     * Where the card's four edges are, in file coordinates: its corners (top-left, top-right,
+     * bottom-right, bottom-left), flat. The card is a true rectangle, so where its edges fall in
+     * the chart's own frame says how the printer rotated, scaled and skewed the file on the paper.
+     * Each edge is found on nine lines across its side as the first place beyond the file's edge
+     * where the paper ends (a run of 1.5 % that differs from the paper just inside it), a line is
+     * fitted through them with the outliers dropped, and the corners are the intersections. Null
+     * when an edge cannot be found or is implausible (the background looked like paper).
+     */
+    fun measureCard(photo: Bitmap, corners: FloatArray): FloatArray? {
+        val h = homography(corners)
+        val full = IntArray(photo.width * photo.height)
+        photo.getPixels(full, 0, photo.width, 0, 0, photo.width, photo.height)
+        fun rgb(fx: Double, fy: Double): Int {
+            val p = map(h, TestChart.fileToContent(fx.toFloat()).toDouble(), TestChart.fileToContent(fy.toFloat()).toDouble())
+            return sample(full, photo.width, photo.height, p[0], p[1])
+        }
+        fun luma(c: Int) = (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f
+        val white = (0 until 9).map { luma(rgb(0.1 + 0.1 * it, 0.095)) }.sorted()[4]
+        if (white < 60f) return null
+        fun distance(a: Int, b: Int) = maxOf(Math.abs(Color.red(a) - Color.red(b)), Math.abs(Color.green(a) - Color.green(b)), Math.abs(Color.blue(a) - Color.blue(b)))
+        // The edge on one perpendicular: outward from 3 % beyond the file's edge.
+        fun edge(side: Int, along: Double, limit: Double): Double? {
+            fun at(t: Double) = when (side) { 0 -> rgb(along, t); 1 -> rgb(along, 1 - t); 2 -> rgb(t, along); else -> rgb(1 - t, along) }
+            var t = -0.03
+            while (t > limit) {
+                // The paper just inside: the brightest of the previous 2 % (a ring line may sit there).
+                var paper = at(t + 0.004)
+                for (k in 2..6) { val c = at(t + 0.004 * k); if (luma(c) > luma(paper)) paper = c }
+                var ends = true
+                var u = t
+                while (u > t - 0.015) {
+                    if (distance(at(u), paper) < white * 0.12f) { ends = false; break }
+                    u -= 0.001
+                }
+                if (ends) return t
+                t -= 0.0005
+            }
+            return null
+        }
+        val alongs = (1..9).map { it / 10.0 }
+        // Each side's edge as a line t = a + b·along, with the outliers (more than 0.4 % off) dropped.
+        fun fitSide(side: Int): DoubleArray? {
+            val limit = if (side == 1) -0.45 else -0.2
+            var pts = alongs.mapNotNull { al -> edge(side, al, limit)?.let { al to it } }
+            var line = doubleArrayOf(0.0, 0.0)
+            for (pass in 0 until 2) {
+                if (pts.size < 6) return null
+                val mx = pts.map { it.first }.average(); val my = pts.map { it.second }.average()
+                val b = pts.sumOf { (it.first - mx) * (it.second - my) } / pts.sumOf { (it.first - mx) * (it.first - mx) }
+                line = doubleArrayOf(my - b * mx, b)
+                pts = pts.filter { Math.abs(it.second - (line[0] + line[1] * it.first)) <= 0.004 }
+            }
+            if (pts.size < 6) return null
+            val middle = line[0] + line[1] * 0.5
+            val plausible = if (side == 1) middle in -0.45..-0.15 else middle in -0.2..-0.02
+            return if (plausible) line else null
+        }
+        val lines = Array(4) { fitSide(it) }
+        if (lines.any { it == null }) return null
+        // Lines in file coordinates: top y = a0 + b0 x, bottom y = 1 - (a1 + b1 x), left x = a2 + b2 y, right x = 1 - (a3 + b3 y).
+        fun corner(horizontal: DoubleArray, flipH: Boolean, vertical: DoubleArray, flipV: Boolean): DoubleArray {
+            // Iterate: x from the vertical line at the current y, y from the horizontal line at that x.
+            var x = 0.5; var y = 0.5
+            for (i in 0 until 8) {
+                val vx = vertical[0] + vertical[1] * y
+                x = if (flipV) 1 - vx else vx
+                val hy = horizontal[0] + horizontal[1] * x
+                y = if (flipH) 1 - hy else hy
+            }
+            return doubleArrayOf(x, y)
+        }
+        val top = lines[0]!!; val bottom = lines[1]!!; val left = lines[2]!!; val right = lines[3]!!
+        val tl = corner(top, false, left, false); val tr = corner(top, false, right, true)
+        val br = corner(bottom, true, right, true); val bl = corner(bottom, true, left, false)
+        return floatArrayOf(tl[0].toFloat(), tl[1].toFloat(), tr[0].toFloat(), tr[1].toFloat(), br[0].toFloat(), br[1].toFloat(), bl[0].toFloat(), bl[1].toFloat())
     }
 
     /** Inverse of a 3×3 homography. */
