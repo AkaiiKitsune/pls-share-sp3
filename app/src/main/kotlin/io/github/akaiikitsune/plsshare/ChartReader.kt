@@ -491,6 +491,18 @@ object ChartReader {
         return floatArrayOf(stepTop, gradientBottom, stepLeft, patchRight)
     }
 
+    /** Inverse of a 3×3 homography. */
+    fun invert(h: DoubleArray): DoubleArray {
+        val a = h[0]; val b = h[1]; val c = h[2]; val d = h[3]; val e = h[4]; val f = h[5]; val g = h[6]; val hh = h[7]; val i = h[8]
+        val det = a * (e * i - f * hh) - b * (d * i - f * g) + c * (d * hh - e * g)
+        val inv = doubleArrayOf(
+            (e * i - f * hh) / det, (c * hh - b * i) / det, (b * f - c * e) / det,
+            (f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det,
+            (d * hh - e * g) / det, (b * g - a * hh) / det, (a * e - b * d) / det,
+        )
+        return inv
+    }
+
     // ------------------------------------------------------------ Anchors: the four corner patches
 
     /** Grid positions (column, row) of the four anchor patches: red, cyan, grey, sky blue. */

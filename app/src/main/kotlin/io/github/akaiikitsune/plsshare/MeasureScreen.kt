@@ -34,8 +34,9 @@ internal fun describeHues(s: Strings, model: FilmModel): String {
 
 /** The printer's geometry in a sentence, or "not measured". */
 internal fun describeGeometry(s: Strings, g: PrinterGeometry): String {
-    if (!g.measured) return s.geometryNone
-    return s.geometryReadout.format((g.stretch - 1f) * 100f, (g.stretchX - 1f) * 100f, g.hiddenTop * 100f, g.hiddenBottom * 100f, g.hiddenLeft * 100f, g.hiddenRight * 100f)
+    val stretch = if (g.measured) s.geometryStretch.format((g.stretch - 1f) * 100f, (g.stretchX - 1f) * 100f) else s.geometryNone
+    val cuts = if (g.cutsKnown) s.geometryCuts.format(g.hiddenTop * 100f, g.hiddenBottom * 100f, g.hiddenLeft * 100f, g.hiddenRight * 100f) else s.geometryCutsNone
+    return stretch + "\n" + cuts
 }
 
 /**

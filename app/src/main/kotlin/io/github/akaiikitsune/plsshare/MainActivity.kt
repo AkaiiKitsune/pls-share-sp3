@@ -923,10 +923,14 @@ class MainActivity : Activity() {
         geometryReadout = ui.text("", 13f)
         root.addView(geometryReadout)
         ui.space(root, 6)
-        // By hand: each reference line's offset from where the file puts it, in tenths of a percent.
-        fun geoSlider(label: String, read: () -> Float, fileValue: Float, write: (Float) -> Unit) {
+        // The frame's cuts, read on the framing chart, in halves of a percent.
+        root.addView(ui.softButton(s.printFraming) { printFraming() }.apply { tooltipText = s.printFramingTip }, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
+        ui.space(root, 8)
+        root.addView(ui.text(s.geometryCutsHint, 12f, alpha = 0.7f))
+        ui.space(root, 6)
+        fun cutSlider(label: String, read: () -> Float, write: (Float) -> Unit) {
             val value = ui.text("", 13f, alpha = 0.7f).apply { gravity = Gravity.END }
-            fun show(v: Float) { value.text = "%+.1f %%".format((v - fileValue) * 100f) }
+            fun show(v: Float) { value.text = "%.1f %%".format(v * 100f) }
             show(read())
             val header = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -935,11 +939,11 @@ class MainActivity : Activity() {
             }
             root.addView(header)
             val bar = SeekBar(this).apply {
-                max = 160
-                progress = Math.round((read() - fileValue) * 1000f) + 80
+                max = 24
+                progress = Math.round(read() * 200f)
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                        val v = fileValue + (progress - 80) / 1000f
+                        val v = progress / 200f
                         show(v)
                         if (fromUser) { write(v); geometry.save(prefs); applyGeometry(); refreshPreview() }
                     }
@@ -947,13 +951,13 @@ class MainActivity : Activity() {
                     override fun onStopTrackingTouch(seekBar: SeekBar) {}
                 })
             }
-            geometryBars += bar to { Math.round((read() - fileValue) * 1000f) + 80 }
+            geometryBars += bar to { Math.round(read() * 200f) }
             root.addView(bar, LinearLayout.LayoutParams(ui.match, ui.wrap))
         }
-        geoSlider(s.geometryTop, { geometry.stepTop }, PrinterGeometry.STEP_TOP_FILE) { geometry.stepTop = it }
-        geoSlider(s.geometryBottom, { geometry.gradientBottom }, PrinterGeometry.GRADIENT_BOTTOM_FILE) { geometry.gradientBottom = it }
-        geoSlider(s.geometryLeft, { geometry.stepLeft }, PrinterGeometry.STEP_LEFT_FILE) { geometry.stepLeft = it }
-        geoSlider(s.geometryRight, { geometry.patchRight }, PrinterGeometry.PATCH_RIGHT_FILE) { geometry.patchRight = it }
+        cutSlider(s.geometryCutTop, { geometry.cutTop }) { geometry.cutTop = it }
+        cutSlider(s.geometryCutBottom, { geometry.cutBottom }) { geometry.cutBottom = it }
+        cutSlider(s.geometryCutLeft, { geometry.cutLeft }) { geometry.cutLeft = it }
+        cutSlider(s.geometryCutRight, { geometry.cutRight }) { geometry.cutRight = it }
         ui.space(root, 6)
         geometryToggle = ui.softButton(s.geometryCompensate) {
             geometry.compensate = !geometry.compensate
@@ -1131,7 +1135,8 @@ class MainActivity : Activity() {
         o.put("presets", org.json.JSONArray(prefs.getString(Presets.KEY, null) ?: "[]"))
         o.put("compensate", compensate)
         o.put("geometry", org.json.JSONObject().put("stepTop", geometry.stepTop.toDouble()).put("gradientBottom", geometry.gradientBottom.toDouble())
-            .put("stepLeft", geometry.stepLeft.toDouble()).put("patchRight", geometry.patchRight.toDouble()).put("compensate", geometry.compensate))
+            .put("stepLeft", geometry.stepLeft.toDouble()).put("patchRight", geometry.patchRight.toDouble()).put("compensate", geometry.compensate)
+            .put("cutTop", geometry.cutTop.toDouble()).put("cutBottom", geometry.cutBottom.toDouble()).put("cutLeft", geometry.cutLeft.toDouble()).put("cutRight", geometry.cutRight.toDouble()))
         o.put("filmType", filmType.key)
         return o
     }
@@ -1179,6 +1184,8 @@ class MainActivity : Activity() {
                     geometry.stepLeft = g.optDouble("stepLeft", geometry.stepLeft.toDouble()).toFloat()
                     geometry.patchRight = g.optDouble("patchRight", geometry.patchRight.toDouble()).toFloat()
                     geometry.compensate = g.optBoolean("compensate", geometry.compensate)
+                    geometry.cutTop = g.optDouble("cutTop", geometry.cutTop.toDouble()).toFloat(); geometry.cutBottom = g.optDouble("cutBottom", geometry.cutBottom.toDouble()).toFloat()
+                    geometry.cutLeft = g.optDouble("cutLeft", geometry.cutLeft.toDouble()).toFloat(); geometry.cutRight = g.optDouble("cutRight", geometry.cutRight.toDouble()).toFloat()
                     geometry.save(prefs)
                 }
                 film = FilmModel.load(prefs, filmType)
@@ -2018,6 +2025,24 @@ class MainActivity : Activity() {
     }
 
     private val geometryBars = ArrayList<Pair<SeekBar, () -> Int>>()
+
+    private fun printFraming() {
+        if (connected == null) return message(s.notConnectedYet)
+        if (printing.get()) return message(s.busy)
+        val film = connected?.filmRemaining ?: 0
+        if (film == 0) return message(s.noFilm)
+        AlertDialog.Builder(this)
+            .setMessage(s.printFramingConfirm.format(film))
+            .setNegativeButton(s.cancel, null)
+            .setPositiveButton(s.printFraming) { _, _ ->
+                // Printed raw: no compensation, no pre-warp, so the chart shows the printer as it is.
+                val file = Jobs.save(Jobs.queueDir(this), TestChart.renderFraming(PREVIEW_SIZE))
+                show(homeView)
+                startPrinting(listOf(file), archive = false)
+                toast(s.printChartStarted)
+            }
+            .show()
+    }
 
     private fun setFilmType(type: FilmType) {
         if (type == filmType) return

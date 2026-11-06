@@ -10,10 +10,10 @@ import android.graphics.Bitmap
  * of the file, comes out higher, and the gradient's bottom, at 96 %, comes out lower: the SP-3
  * stretches the image vertically by a few percent, and its frame then hides the top and bottom of
  * it. The two measured positions give a linear map from file rows to print rows; its inverse
- * pre-warps prints so that what is framed on screen is what lands on paper, and the frame's window,
- * measured once on a print's edges, tells which part of the file stays visible. The same is done
- * for columns with the grey steps' left edge and the patches' right edge; the user can also set
- * the four positions by hand in the calibration screen.
+ * pre-warps prints so that what is framed on screen is what lands on paper. The same is done for
+ * columns with the grey steps' left edge and the patches' right edge. What the frame hides on each
+ * side is read by the user on the framing chart (nested, numbered rectangles) and entered as four
+ * cuts; the previews then show those bands.
  */
 class PrinterGeometry(
     /** Print position of the file's row 4 % (the grey steps' top). */
@@ -26,17 +26,17 @@ class PrinterGeometry(
     var patchRight: Float = PATCH_RIGHT_FILE,
     /** Whether prints are pre-warped through the inverse map. */
     var compensate: Boolean = true,
+    /** What the frame hides on each side, as fractions of the file, read on the framing chart. */
+    var cutTop: Float = 0f,
+    var cutBottom: Float = 0f,
+    var cutLeft: Float = 0f,
+    var cutRight: Float = 0f,
 ) {
     companion object {
         const val STEP_TOP_FILE = 0.04f
         const val GRADIENT_BOTTOM_FILE = 0.96f
         const val STEP_LEFT_FILE = 0.04f
         const val PATCH_RIGHT_FILE = 0.948f
-        /** The frame's window on the print, in print coordinates: the bottom was measured on a print's frame edge, the sides show the whole width. */
-        const val WINDOW_TOP = 0f
-        const val WINDOW_BOTTOM = 0.96f
-        const val WINDOW_LEFT = 0f
-        const val WINDOW_RIGHT = 1f
         private const val PREFIX = "geometry."
 
         fun load(prefs: SharedPreferences) = PrinterGeometry(
@@ -45,16 +45,26 @@ class PrinterGeometry(
             prefs.getFloat(PREFIX + "stepLeft", STEP_LEFT_FILE),
             prefs.getFloat(PREFIX + "patchRight", PATCH_RIGHT_FILE),
             prefs.getBoolean(PREFIX + "compensate", true),
+            prefs.getFloat(PREFIX + "cutTop", 0f), prefs.getFloat(PREFIX + "cutBottom", 0f),
+            prefs.getFloat(PREFIX + "cutLeft", 0f), prefs.getFloat(PREFIX + "cutRight", 0f),
         )
     }
 
     fun save(prefs: SharedPreferences) {
         prefs.edit().putFloat(PREFIX + "stepTop", stepTop).putFloat(PREFIX + "gradientBottom", gradientBottom)
             .putFloat(PREFIX + "stepLeft", stepLeft).putFloat(PREFIX + "patchRight", patchRight)
-            .putBoolean(PREFIX + "compensate", compensate).apply()
+            .putBoolean(PREFIX + "compensate", compensate)
+            .putFloat(PREFIX + "cutTop", cutTop).putFloat(PREFIX + "cutBottom", cutBottom).putFloat(PREFIX + "cutLeft", cutLeft).putFloat(PREFIX + "cutRight", cutRight)
+            .apply()
     }
 
-    fun reset() { stepTop = STEP_TOP_FILE; gradientBottom = GRADIENT_BOTTOM_FILE; stepLeft = STEP_LEFT_FILE; patchRight = PATCH_RIGHT_FILE }
+    fun reset() {
+        stepTop = STEP_TOP_FILE; gradientBottom = GRADIENT_BOTTOM_FILE; stepLeft = STEP_LEFT_FILE; patchRight = PATCH_RIGHT_FILE
+        cutTop = 0f; cutBottom = 0f; cutLeft = 0f; cutRight = 0f
+    }
+
+    /** Whether the frame's cuts were entered. */
+    val cutsKnown: Boolean get() = cutTop > 0f || cutBottom > 0f || cutLeft > 0f || cutRight > 0f
 
     /** Set from a measurement (top, bottom, left, right print positions of the four reference lines). */
     fun set(measured: FloatArray) {
@@ -82,11 +92,15 @@ class PrinterGeometry(
     fun toPrintX(file: Float): Float = offsetX + stretchX * file
     fun toFileX(print: Float): Float = (print - offsetX) / stretchX
 
-    /** Fraction of the image, as sent, hidden under the frame on each side. */
-    val hiddenTop: Float get() = if (!measured) 0f else if (compensate) WINDOW_TOP else toFile(WINDOW_TOP).coerceIn(0f, 1f)
-    val hiddenBottom: Float get() = if (!measured) 0f else if (compensate) 1f - WINDOW_BOTTOM else (1f - toFile(WINDOW_BOTTOM)).coerceIn(0f, 1f)
-    val hiddenLeft: Float get() = if (!measured) 0f else if (compensate) WINDOW_LEFT else toFileX(WINDOW_LEFT).coerceIn(0f, 1f)
-    val hiddenRight: Float get() = if (!measured) 0f else if (compensate) 1f - WINDOW_RIGHT else (1f - toFileX(WINDOW_RIGHT)).coerceIn(0f, 1f)
+    /**
+     * Fraction of the image, as sent, hidden under the frame on each side: the cuts read on the
+     * framing chart, which are fractions of the file; with the pre-warp on, file row f shows image
+     * row toPrint(f), so the cuts move through the map.
+     */
+    val hiddenTop: Float get() = if (!cutsKnown) 0f else (if (compensate && measured) toPrint(cutTop) else cutTop).coerceIn(0f, 1f)
+    val hiddenBottom: Float get() = if (!cutsKnown) 0f else (if (compensate && measured) 1f - toPrint(1f - cutBottom) else cutBottom).coerceIn(0f, 1f)
+    val hiddenLeft: Float get() = if (!cutsKnown) 0f else (if (compensate && measured) toPrintX(cutLeft) else cutLeft).coerceIn(0f, 1f)
+    val hiddenRight: Float get() = if (!cutsKnown) 0f else (if (compensate && measured) 1f - toPrintX(1f - cutRight) else cutRight).coerceIn(0f, 1f)
 
     /**
      * Pre-warp a print: file row f, column c receives the image at ([toPrintX] (c), [toPrint] (f)),

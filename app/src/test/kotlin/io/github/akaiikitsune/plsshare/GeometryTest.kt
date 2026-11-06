@@ -59,14 +59,27 @@ class GeometryTest {
         // File row f holds the image row at toPrint(f): near the top it reaches rows above (clamped), lower rows are pulled down.
         val mid = Color.red(warped.getPixel(0, 32)) / 4f
         assertEquals(g.toPrint(32 / 63f) * 63f, mid, 1.5f)
-        assertEquals(1f - PrinterGeometry.WINDOW_BOTTOM, g.hiddenBottom, 1e-4f)
+        // No cuts entered: nothing hidden, whatever the stretch.
+        assertEquals(0f, g.hiddenBottom, 0f)
+        // Cuts read on the framing chart are the hidden bands; with the pre-warp they move through the map.
+        g.cutTop = 0.04f; g.cutBottom = 0.03f; g.cutLeft = 0.05f; g.cutRight = 0.01f
+        assertTrue(g.cutsKnown)
+        assertEquals(g.toPrint(0.04f), g.hiddenTop, 1e-4f)
+        assertEquals(0.05f, g.hiddenLeft, 1e-4f) // no horizontal stretch
         g.compensate = false
-        assertTrue(g.hiddenTop > 0f && g.hiddenBottom > 0.04f)
-        // Columns: a 2 % horizontal stretch pulls the right edge out of the window.
-        val gx = PrinterGeometry(stepLeft = 0.04f, patchRight = 0.966f, compensate = false)
+        assertEquals(0.04f, g.hiddenTop, 1e-4f); assertEquals(0.03f, g.hiddenBottom, 1e-4f); assertEquals(0.01f, g.hiddenRight, 1e-4f)
+        // Columns: a 2 % horizontal stretch is modelled and pre-warped too.
+        val gx = PrinterGeometry(stepLeft = 0.04f, patchRight = 0.966f)
         assertTrue("stretchX %.3f".format(gx.stretchX), gx.stretchX > 1.015f && gx.stretchX < 1.025f)
-        assertTrue(gx.hiddenRight > 0.01f && gx.hiddenLeft < 0.005f)
-        val warpedX = PrinterGeometry(stepLeft = 0.04f, patchRight = 0.966f).prewarp(image)
+        val warpedX = gx.prewarp(image)
         assertEquals(64, warpedX.width)
+        // The framing chart renders with its rectangles.
+        val framing = TestChart.renderFraming(800)
+        // A dark line within the first 1.5 % (the 1 % rectangle), white further in between the rectangles' labels.
+        assertTrue((2..12).any { Color.red(framing.getPixel(400, it)) < 80 })
+        assertEquals(Color.WHITE, framing.getPixel(400, 200))
+        java.io.File(System.getProperty("screenshots.dir") ?: "build/screenshots").apply { mkdirs() }.let { dir ->
+            java.io.FileOutputStream(java.io.File(dir, "chart-framing.png")).use { framing.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
     }
 }
