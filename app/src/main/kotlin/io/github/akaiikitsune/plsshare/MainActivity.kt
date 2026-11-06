@@ -345,12 +345,19 @@ class MainActivity : Activity() {
         root.addView(filmRow)
         ui.space(root, 6)
         filmSwitch = Switch(this).apply {
-            text = s.filmPreview
             isChecked = prefs.getBoolean(PREF_FILM, false)
             setOnCheckedChangeListener { _, checked -> setFilmPreview(checked) }
-            setPadding(ui.dp(4), ui.dp(4), ui.dp(4), ui.dp(4))
+            tooltipText = s.filmPreviewHint
         }
-        root.addView(filmSwitch)
+        val previewRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = ui.dp(44)
+            addView(ui.text(s.filmPreview, 14f), LinearLayout.LayoutParams(0, ui.wrap, 1f))
+            addView(filmSwitch, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+            setOnClickListener { filmSwitch.toggle() }
+        }
+        root.addView(previewRow)
         ui.space(root, 8)
 
         pickButton = ui.softButton(s.pickPhoto) { pickPhoto() }
@@ -1125,17 +1132,15 @@ class MainActivity : Activity() {
 
     private fun buildTextsPanel(): LinearLayout {
         val panel = ui.column()
-        panel.addView(ui.text(s.textsHint, 12f, alpha = 0.6f))
-        ui.space(panel, 10)
         panel.addView(ui.row(
-            ui.softButton(s.addText) { addOverlay(Overlay(Overlay.Kind.TEXT, text = "instax")) },
-            ui.softButton(s.addDate) { addOverlay(Overlay(Overlay.Kind.DATE)) },
+            ui.softButton(s.addText) { addOverlay(Overlay(Overlay.Kind.TEXT, text = "instax")) }.apply { tooltipText = s.textsHint },
+            ui.softButton(s.addDate) { addOverlay(Overlay(Overlay.Kind.DATE)) }.apply { tooltipText = s.textsHint },
             gap = 6,
         ))
         ui.space(panel, 6)
         panel.addView(ui.row(
-            ui.softButton(s.addTime) { addOverlay(Overlay(Overlay.Kind.TIME)) },
-            ui.softButton(s.addDateTime) { addOverlay(Overlay(Overlay.Kind.DATETIME, size = 0.035f)) },
+            ui.softButton(s.addTime) { addOverlay(Overlay(Overlay.Kind.TIME)) }.apply { tooltipText = s.textsHint },
+            ui.softButton(s.addDateTime) { addOverlay(Overlay(Overlay.Kind.DATETIME, size = 0.035f)) }.apply { tooltipText = s.textsHint },
             gap = 6,
         ))
         ui.space(panel, 12)
