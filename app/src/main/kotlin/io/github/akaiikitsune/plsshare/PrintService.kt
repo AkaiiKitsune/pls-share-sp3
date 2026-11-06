@@ -32,6 +32,16 @@ class PrintService : Service() {
         const val EXTRA_PIN = "pin"
         const val EXTRA_TRANSFER_ONLY = "transferOnly"
         const val EXTRA_ARCHIVE = "archive"
+        const val ACTION_CANCEL = "io.github.akaiikitsune.plsshare.CANCEL"
+
+        /** Set by [cancel]; the running job polls it between steps. */
+        @Volatile private var cancelRequested = false
+
+        /** Ask the running job to stop. Takes effect before the sheet is committed; after that the current print finishes and the queue stops. */
+        fun cancel(context: Context) {
+            cancelRequested = true
+            context.startService(Intent(context, PrintService::class.java).setAction(ACTION_CANCEL))
+        }
 
         /** Pause between two prints, on top of the printer's own readiness wait. */
         private const val PAUSE_BETWEEN_MS = 3_000L
@@ -70,6 +80,11 @@ class PrintService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CANCEL) {
+            cancelRequested = true
+            return START_NOT_STICKY
+        }
+        cancelRequested = false
         // A started foreground service must call startForeground promptly, whatever happens next.
         createChannel()
         startForeground(NOTIFICATION_ID, notification(s.printingTitle, s.printingStart, -1), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -130,12 +145,24 @@ class PrintService : Service() {
             }
             var filmLeft = -1
             val result = runCatching {
-                printer.print(source, transferOnly) { event ->
+                printer.print(source, transferOnly, { event ->
                     if (event is PrintEvent.Finished) filmLeft = event.filmRemaining
                     publish(Status(true, index, files.size, describe(event), progressOf(event)))
-                }
+                }) { cancelRequested }
             }
             bitmap.recycle()
+            if (result.exceptionOrNull() is instax.PrintCancelledException) {
+                log("job $index cancelled before the sheet was committed")
+                publish(Status(true, index, files.size, s.cancelled, -1))
+                failed += files.size - index + 1
+                break
+            }
+            if (cancelRequested) {
+                log("cancel requested: stopping the queue after job $index")
+                result.onSuccess { printed++; if (archive && !transferOnly) Jobs.archive(this, file); if (file.parentFile?.name == "queue") file.delete() }
+                failed += files.size - index
+                break
+            }
             result.onSuccess {
                 printed++
                 val archived = if (archive && !transferOnly) Jobs.archive(this, file) else null

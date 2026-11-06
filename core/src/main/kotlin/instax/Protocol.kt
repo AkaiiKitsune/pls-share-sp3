@@ -105,6 +105,9 @@ class PrinterException(message: String, val returnCode: Int = -1) : InstaxExcept
 /** The print did not finish in time. */
 class PrintTimeoutException(message: String) : InstaxException(message)
 
+/** The caller cancelled before the printer started exposing the film. */
+class PrintCancelledException : InstaxException("the print was cancelled")
+
 data class Command(val opcode: Int, val sessionId: Int, val pin: Int, val payload: ByteArray) {
     override fun equals(other: Any?): Boolean =
         other is Command && opcode == other.opcode && sessionId == other.sessionId && pin == other.pin &&

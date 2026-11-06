@@ -137,6 +137,7 @@ class MainActivity : Activity() {
     private lateinit var editButton: Button
     private lateinit var printButton: Button
     private lateinit var progressBar: ProgressBar
+    private lateinit var cancelButton: Button
     private lateinit var messageView: TextView
     private lateinit var debugCard: View
     private lateinit var hostField: EditText
@@ -361,6 +362,12 @@ class MainActivity : Activity() {
             visibility = View.GONE
         }
         root.addView(progressBar, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        cancelButton = ui.softButton(s.cancelPrint) {
+            PrintService.cancel(this)
+            ui.setEnabledLook(cancelButton, false)
+            message(s.cancelRequested)
+        }.apply { visibility = View.GONE }
+        root.addView(cancelButton, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
         messageView = ui.text("", 14f).apply { visibility = View.GONE }
         root.addView(messageView, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(8) })
         ui.space(root, 16)
@@ -524,6 +531,7 @@ class MainActivity : Activity() {
                 val warnings = listOfNotNull(
                     if (info.coverOpen) s.coverOpen else null,
                     if (info.filmRemaining == 0) s.noFilm else null,
+                    if (info.filmRemaining in 1..2) s.lowFilm.format(info.filmRemaining) else null,
                     if (info.batteryLevel == 0 && !info.charging) s.lowBattery else null,
                 )
                 statusDetail.text = s.connectedDetail.format(
@@ -552,6 +560,8 @@ class MainActivity : Activity() {
     private fun setBusy(busy: Boolean) {
         updateButtons()
         progressBar.visibility = if (busy) View.VISIBLE else View.GONE
+        cancelButton.visibility = if (busy) View.VISIBLE else View.GONE
+        if (busy) ui.setEnabledLook(cancelButton, true)
         progressBar.isIndeterminate = busy
         watcher.paused = busy
         if (busy) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -708,9 +718,18 @@ class MainActivity : Activity() {
     }
 
     private fun printQueue() {
-        if (connected == null) return message(s.notConnectedYet)
+        val info = connected ?: return message(s.notConnectedYet)
         val files = Jobs.list(Jobs.queueDir(this))
         if (files.isEmpty()) return
+        val film = info.filmRemaining
+        if (film in 1 until files.size) {
+            AlertDialog.Builder(this)
+                .setMessage(s.queueTooLong.format(files.size, film, film))
+                .setNegativeButton(s.cancel, null)
+                .setPositiveButton(s.printFirst.format(film)) { _, _ -> startPrinting(files.take(film)) }
+                .show()
+            return
+        }
         startPrinting(files)
     }
 

@@ -40,7 +40,7 @@ class InstaxPrinterTest {
     @Test
     fun `print sends the image in the right sequence`() {
         val events = mutableListOf<PrintEvent>()
-        printer().print(gradient) { events += it }
+        printer().print(gradient, listener = { events += it })
 
         assertEquals(1, simulator.images.size)
         val expected = RawImage.encode(gradient.render(800, 800), 800, 800)
@@ -141,13 +141,48 @@ class InstaxPrinterTest {
     }
 }
 
+class CancelTest {
+    @Test
+    fun `cancelling during the transfer stops before any print and releases the lock`() {
+        Simulator(port = 0).start().use { simulator ->
+            var chunks = 0
+            val source = ImageSource { w, h -> IntArray(w * h) }
+            val printer = InstaxPrinter("127.0.0.1", simulator.port, sessionId = 11, sleeper = {})
+            val e = assertThrows(PrintCancelledException::class.java) {
+                printer.print(source, listener = { if (it is PrintEvent.Transferring) chunks++ }) { chunks >= 3 }
+            }
+            assertEquals("the print was cancelled", e.message)
+            assertTrue(simulator.images.isEmpty())
+            assertFalse(simulator.opcodes.contains(Opcode.PRINT_START))
+            assertEquals(listOf(true, false), simulator.lockHistory)
+            assertEquals(10, simulator.film)
+        }
+    }
+
+    @Test
+    fun `cancelling right before print start resets the printer instead`() {
+        Simulator(port = 0).start().use { simulator ->
+            var afterTransfer = false
+            val source = ImageSource { w, h -> IntArray(w * h) }
+            val printer = InstaxPrinter("127.0.0.1", simulator.port, sessionId = 12, sleeper = {})
+            assertThrows(PrintCancelledException::class.java) {
+                printer.print(source, listener = { if (it is PrintEvent.WaitingForPrinter) afterTransfer = true }) { afterTransfer }
+            }
+            assertEquals(1, simulator.images.size)
+            assertFalse(simulator.opcodes.contains(Opcode.PRINT_START))
+            assertEquals(2, simulator.opcodes.count { it == Opcode.RESET })
+            assertEquals(listOf(true, false), simulator.lockHistory)
+        }
+    }
+}
+
 class TransferOnlyTest {
     @Test
     fun `transfer only sends the image, resets and never starts a print`() {
         Simulator(port = 0).start().use { simulator ->
             val events = mutableListOf<PrintEvent>()
             val source = ImageSource { w, h -> IntArray(w * h) { 0xFF336699.toInt() } }
-            InstaxPrinter("127.0.0.1", simulator.port, sessionId = 9, sleeper = {}).print(source, transferOnly = true) { events += it }
+            InstaxPrinter("127.0.0.1", simulator.port, sessionId = 9, sleeper = {}).print(source, transferOnly = true, listener = { events += it })
             assertEquals(1, simulator.images.size)
             assertFalse(simulator.opcodes.contains(Opcode.PRINT_START))
             assertFalse(simulator.opcodes.contains(Opcode.PRINT_STATUS))

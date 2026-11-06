@@ -220,10 +220,24 @@ class InstaxPrinter(
      * With [transferOnly] the image is sent and the printer is reset instead of printing, which
      * exercises the whole transfer without using a sheet of film.
      */
-    fun print(source: ImageSource, transferOnly: Boolean = false, listener: PrintListener = PrintListener {}) {
+    fun print(
+        source: ImageSource,
+        transferOnly: Boolean = false,
+        listener: PrintListener = PrintListener {},
+        /**
+         * Polled between steps; returning true aborts with [PrintCancelledException]. Once
+         * `PRINT_START` has been sent the sheet is committed and the job runs to its end.
+         */
+        cancelled: () -> Boolean = { false },
+    ) {
+        this.cancelled = cancelled
         if (reachTimeoutMillis > 0) {
-            waitUntilReachable { attempt, e -> listener.onEvent(PrintEvent.Reaching(attempt, shortReason(e))) }
+            waitUntilReachable { attempt, e ->
+                checkCancelled()
+                listener.onEvent(PrintEvent.Reaching(attempt, shortReason(e)))
+            }
         }
+        checkCancelled()
         listener.onEvent(PrintEvent.Locking)
         setLock(true)
         try {
@@ -236,6 +250,12 @@ class InstaxPrinter(
                 logger?.invoke("could not unlock the printer: $e")
             }
         }
+    }
+
+    private var cancelled: () -> Boolean = { false }
+
+    private fun checkCancelled() {
+        if (cancelled()) throw PrintCancelledException()
     }
 
     /** Lock the printer to this client, or release it. The printer releases the lock by itself after 60 s idle. */
@@ -253,6 +273,7 @@ class InstaxPrinter(
             info
         }
         listener.onEvent(PrintEvent.Ready(info))
+        checkCancelled()
 
         logger?.invoke("printer: ${info.model} fw ${info.firmware} battery ${info.batteryLevel}/3${if (info.charging) " charging" else ""} film ${info.filmRemaining} prints ${info.printCount}")
         val data = RawImage.encode(source.render(info.width, info.height), info.width, info.height)
@@ -274,6 +295,11 @@ class InstaxPrinter(
             sendWhenIdle(c, Opcode.VERSION, checkEjecting = true)
             val elapsed = (clock() - transferEnd) / 1_000_000
             if (elapsed < TRANSFER_SETTLE_TIME) sleeper(TRANSFER_SETTLE_TIME - elapsed)
+            // Last chance to stop without using a sheet: reset the printer and leave.
+            if (cancelled()) {
+                c.send(Opcode.RESET)
+                throw PrintCancelledException()
+            }
             sendWhenIdle(c, Opcode.PRINT_START)
         }
         val estimate = if (reply.payload.size >= 4) Payloads.printEstimateTenths(reply.payload) / 10.0 else 0.0
@@ -290,6 +316,7 @@ class InstaxPrinter(
         var index = 0
         var offset = 0
         while (offset < data.size) {
+            checkCancelled()
             // Every chunk is sent at full size. The image length in the transfer start tells the
             // printer where the zero padding of the last chunk begins.
             c.send(Opcode.SEND_CHUNK, Payloads.chunk(index, data, offset, chunkSize))

@@ -102,7 +102,7 @@ fun main(args: Array<String>) {
                     println("Preview saved to ${preview.path}")
                     return
                 }
-                printer.print(DesktopImages.source(image, fit), transferOnly = transferOnly) { event ->
+                printer.print(DesktopImages.source(image, fit), transferOnly = transferOnly, listener = { event ->
                     when (event) {
                         is PrintEvent.Reaching -> print("\rWaiting for the printer (attempt ${event.attempt}, ${event.reason})")
                         PrintEvent.Locking -> println("\nConnecting to $host:$port...")
@@ -114,7 +114,7 @@ fun main(args: Array<String>) {
                         PrintEvent.TransferOnlyFinished -> println("Transfer test done, nothing printed")
                         PrintEvent.Unlocked -> {}
                     }
-                }
+                })
             }
         }
     } catch (e: InstaxException) {
