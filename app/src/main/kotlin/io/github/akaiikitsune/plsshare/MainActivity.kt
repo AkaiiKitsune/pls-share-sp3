@@ -132,7 +132,6 @@ class MainActivity : Activity() {
     private lateinit var statusSpinner: ProgressBar
     private lateinit var statusAction: Button
     private lateinit var previewImage: PrintPreviewView
-    private lateinit var filmSwitch: Switch
     private lateinit var previewHint: TextView
     private lateinit var pickButton: Button
     private lateinit var editButton: Button
@@ -343,22 +342,7 @@ class MainActivity : Activity() {
             addView(filmTypeSelector.view, LinearLayout.LayoutParams(0, ui.wrap, 1f))
         }
         root.addView(filmRow)
-        ui.space(root, 6)
-        filmSwitch = Switch(this).apply {
-            isChecked = prefs.getBoolean(PREF_FILM, false)
-            setOnCheckedChangeListener { _, checked -> setFilmPreview(checked) }
-            tooltipText = s.filmPreviewHint
-        }
-        val previewRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = ui.dp(44)
-            addView(ui.text(s.filmPreview, 14f), LinearLayout.LayoutParams(0, ui.wrap, 1f))
-            addView(filmSwitch, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
-            setOnClickListener { filmSwitch.toggle() }
-        }
-        root.addView(previewRow)
-        ui.space(root, 8)
+        ui.space(root, 12)
 
         pickButton = ui.softButton(s.pickPhoto) { pickPhoto() }
         editButton = ui.softButton(s.edit) { openEditor() }
@@ -938,7 +922,6 @@ class MainActivity : Activity() {
         prefs.edit().putBoolean(PREF_FILM, on).apply()
         previewImage.filmPreview = on
         editorView.filmPreview = on
-        if (filmSwitch.isChecked != on) filmSwitch.isChecked = on
         filmButton.setTextColor(if (on) ui.accent else labelColor)
     }
 
