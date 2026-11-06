@@ -131,7 +131,6 @@ class MainActivity : Activity() {
     private lateinit var measureColourReport: TextView
     private lateinit var measureColourCompare: ImageView
     private lateinit var hueReadout: TextView
-    private lateinit var measureStatusView: TextView
     private var measuredFilm: FilmModel? = null
     private var shootUri: Uri? = null
     private lateinit var chartView: ImageView
@@ -167,7 +166,9 @@ class MainActivity : Activity() {
     private lateinit var printButton: Button
     private lateinit var progressBar: ProgressBar
     private lateinit var cancelButton: Button
+    /** Print progress line, shown only while a print runs. */
     private lateinit var messageView: TextView
+    private var lastFinishedStatus: PrintService.Status? = null
     private lateinit var debugCard: View
     private lateinit var hostField: EditText
     private lateinit var transferOnlySwitch: Switch
@@ -599,10 +600,14 @@ class MainActivity : Activity() {
         ui.setEnabledLook(printQueueButton, !busy && connected != null && Jobs.list(Jobs.queueDir(this)).isNotEmpty())
     }
 
+    /**
+     * Something the user must know right now (an error, a result): a long toast, journaled. Nothing
+     * is ever left written on the screen; the journal is for the debug console.
+     */
     private fun message(text: String) {
-        messageView.text = text
-        messageView.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
-        if (text.isNotBlank()) journal(text)
+        if (text.isBlank()) return
+        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show()
+        journal(text)
     }
 
     /** A passing confirmation (a setting toggled, something saved): a toast, journaled, never left on screen. */
@@ -947,10 +952,7 @@ class MainActivity : Activity() {
         val pick = ui.softButton(s.measurePick) { pickChartPhoto() }
         val shoot = ui.softButton(s.measureShoot) { shootChartPhoto() }
         root.addView(ui.row(pick, shoot), LinearLayout.LayoutParams(ui.match, ui.wrap))
-        ui.space(root, 8)
-        measureStatusView = ui.text("", 13f, color = Ui.accent(this)).apply { visibility = View.GONE }
-        root.addView(measureStatusView)
-        ui.space(root, 4)
+        ui.space(root, 12)
         cornerPick = CornerPickView(this).apply {
             background = ui.rounded(Ui.CARD, 12)
             clipToOutline = true
@@ -1056,12 +1058,8 @@ class MainActivity : Activity() {
         }
     }
 
-    /** A line under the photo buttons of the measurement screen, for what went wrong. */
-    private fun measureStatus(text: String) {
-        measureStatusView.text = text
-        measureStatusView.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
-        if (text.isNotBlank()) journal(text)
-    }
+    /** What went wrong with the chart photo: a toast like any other message. */
+    private fun measureStatus(text: String) = message(text)
 
     private fun loadChartPhoto(uri: Uri) {
         setBusy(true)
@@ -2206,9 +2204,16 @@ class MainActivity : Activity() {
             printing.set(status.running)
             setBusy(status.running)
         }
-        if (status.message.isNotEmpty()) {
+        // Live progress stays next to the progress bar while printing; the final word is a toast.
+        if (status.running && status.message.isNotEmpty()) {
             messageView.text = if (status.total > 1) "${status.index}/${status.total} · ${status.message}" else status.message
             messageView.visibility = View.VISIBLE
+        } else {
+            messageView.visibility = View.GONE
+            if (!status.running && status.message.isNotEmpty() && status !== lastFinishedStatus) {
+                lastFinishedStatus = status
+                message(status.message)
+            }
         }
         if (status.running) {
             progressBar.isIndeterminate = status.progress < 0
