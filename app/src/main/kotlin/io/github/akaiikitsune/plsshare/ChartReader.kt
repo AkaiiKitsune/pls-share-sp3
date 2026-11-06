@@ -211,7 +211,161 @@ object ChartReader {
      * grid of patches ([detectFromGrid]). The monochrome chart has no grid; its corners are tapped.
      */
     fun detectCorners(photo: Bitmap, type: FilmType): FloatArray? =
-        if (type.monochrome) null else runCatching { detectFromGrid(photo) }.getOrNull()
+        (if (type.monochrome) null else runCatching { detectFromGrid(photo) }.getOrNull())
+            ?: runCatching { detectFromRing(photo) }.getOrNull()
+
+    // ------------------------------------------------------------ Detection from the framing ring
+
+    /**
+     * Align the chart on its framing ring, which both charts carry: on every third row and column
+     * of the photo, the ring crosses as a series of at least five dark lines at even spacing; the
+     * innermost line of each series, over the rows and columns, draws the ring's inner rectangle
+     * (the file's 8 % line), one straight edge per side; the four edges are fitted with the
+     * outliers dropped, their spacing must be 84 line pitches, and the content square follows
+     * from the chart's geometry. The numbers interrupt a few rows and columns, which are simply
+     * skipped; the frame may hide up to three lines on a side.
+     */
+    fun detectFromRing(photo: Bitmap): FloatArray? {
+        val w = photo.width; val h = photo.height
+        val full = IntArray(w * h)
+        photo.getPixels(full, 0, w, 0, 0, w, h)
+        val luma = FloatArray(w * h) { val c = full[it]; (299 * Color.red(c) + 587 * Color.green(c) + 114 * Color.blue(c)) / 1000f }
+        // Dips of a profile: local minima (the centre of a flat bottom) at least 10 % below the
+        // brightest sample within six pixels on both sides.
+        fun dips(p: FloatArray): List<Int> {
+            val out = ArrayList<Int>()
+            var i = 2
+            while (i < p.size - 2) {
+                val v = p[i]
+                if (v <= p[i - 1] && v <= p[i + 1] && v <= p[i - 2] && v <= p[i + 2]) {
+                    var left = v; var right = v
+                    for (j in Math.max(0, i - 6) until i) if (p[j] > left) left = p[j]
+                    for (j in i + 1..Math.min(p.size - 1, i + 6)) if (p[j] > right) right = p[j]
+                    val paper = Math.min(left, right)
+                    if (v < paper * 0.9f && paper > 40f) {
+                        var a = i; var b = i
+                        while (a > 0 && p[a - 1] <= v + (paper - v) * 0.15f) a--
+                        while (b < p.size - 1 && p[b + 1] <= v + (paper - v) * 0.15f) b++
+                        out += (a + b) / 2
+                        i = b + 1
+                        continue
+                    }
+                }
+                i++
+            }
+            return out
+        }
+        // Series of at least five dips at even spacing (3 to 24 px): (first, last, pitch).
+        fun series(d: List<Int>): List<Triple<Int, Int, Float>> {
+            val out = ArrayList<Triple<Int, Int, Float>>()
+            var i = 0
+            while (i < d.size - 4) {
+                val g0 = (d[i + 1] - d[i]).toFloat()
+                if (g0 < 3f || g0 > 24f) { i++; continue }
+                var k = i + 1
+                var sum = g0; var n = 1
+                while (k < d.size - 1) {
+                    val g = (d[k + 1] - d[k]).toFloat()
+                    val mean = sum / n
+                    if (g < mean * 0.65f || g > mean * 1.5f) break
+                    sum += g; n++; k++
+                }
+                if (k - i >= 4) { out += Triple(d[i], d[k], sum / n); i = k + 1 } else i++
+            }
+            return out
+        }
+        // Per row: the pair of series (one each side) with matching pitch and 84 pitches between their inner ends.
+        class Crossing(val at: Int, val innerA: Int, val innerB: Int, val pitch: Float)
+        fun crossings(count: Int, length: Int, profile: (Int, FloatArray) -> Unit): List<Crossing> {
+            val out = ArrayList<Crossing>()
+            val p = FloatArray(length)
+            var at = 0
+            while (at < count) {
+                profile(at, p)
+                val ser = series(dips(p))
+                var best: Crossing? = null; var bestError = Float.MAX_VALUE
+                // Just inside each series lies the white margin between the ring and the content:
+                // one to two and a half pitches of paper, brighter than anything in the series.
+                fun paperInside(inner: Int, pitch: Float, direction: Int, ceiling: Float): Boolean {
+                    var k = (pitch * 1.2f).toInt()
+                    while (k <= (pitch * 2.5f).toInt()) {
+                        val x = inner + direction * k
+                        if (x < 0 || x >= length || p[x] < ceiling * 0.8f) return false
+                        k++
+                    }
+                    return true
+                }
+                for (a in ser) for (b in ser) {
+                    if (b.first <= a.second) continue
+                    val pitch = (a.third + b.third) / 2
+                    if (Math.abs(a.third - b.third) > pitch * 0.15f) continue
+                    val span = (b.first - a.second).toFloat()
+                    val error = Math.abs(span / pitch - 84f)
+                    if (error >= 10f || error >= bestError) continue
+                    var brightest = 0f
+                    for (x in a.first..b.second) if (p[x] > brightest) brightest = p[x]
+                    if (!paperInside(a.second, pitch, 1, brightest) || !paperInside(b.first, pitch, -1, brightest)) continue
+                    bestError = error; best = Crossing(at, a.second, b.first, pitch)
+                }
+                best?.let { out += it }
+                at += 3
+            }
+            return out
+        }
+        val rows = crossings(h, w) { y, p -> for (x in 0 until w) p[x] = luma[y * w + x] }
+        val cols = crossings(w, h) { x, p -> for (y in 0 until h) p[y] = luma[y * w + x] }
+        if (rows.size < 12 || cols.size < 12) return null
+        // A straight edge through the inner ends: the best two-point line by inliers within 2.5 px, refitted on them.
+        fun edge(points: List<FloatArray>): DoubleArray? { // (along, across) -> across = a + b * along
+            var best: DoubleArray? = null; var bestCount = 0
+            val n = points.size
+            val tries = minOf(400, n * (n - 1) / 2)
+            var t = 0
+            while (t < tries) {
+                val i = (t * 7919) % n; val j = (t * 104729 + 1) % n
+                t++
+                if (i == j) continue
+                val pi = points[i]; val pj = points[j]
+                if (Math.abs(pj[0] - pi[0]) < 1f) continue
+                val b = (pj[1] - pi[1]) / (pj[0] - pi[0]); val a = pi[1] - b * pi[0]
+                val count = points.count { Math.abs(it[1] - (a + b * it[0])) <= 2.5f }
+                if (count > bestCount) { bestCount = count; best = doubleArrayOf(a.toDouble(), b.toDouble()) }
+            }
+            val line = best ?: return null
+            val inliers = points.filter { Math.abs(it[1] - (line[0] + line[1] * it[0])) <= 2.5f }
+            if (inliers.size < 8 || inliers.size < points.size / 2) return null
+            val mx = inliers.map { it[0].toDouble() }.average(); val my = inliers.map { it[1].toDouble() }.average()
+            val b = inliers.sumOf { (it[0] - mx) * (it[1] - my) } / inliers.sumOf { (it[0] - mx) * (it[0] - mx) }
+            return doubleArrayOf(my - b * mx, b)
+        }
+        val left = edge(rows.map { floatArrayOf(it.at.toFloat(), it.innerA.toFloat()) })      // x = a + b y
+        val right = edge(rows.map { floatArrayOf(it.at.toFloat(), it.innerB.toFloat()) })
+        val top = edge(cols.map { floatArrayOf(it.at.toFloat(), it.innerA.toFloat()) })       // y = a + b x
+        val bottom = edge(cols.map { floatArrayOf(it.at.toFloat(), it.innerB.toFloat()) })
+        if (left == null || right == null || top == null || bottom == null) return null
+        fun meet(vertical: DoubleArray, horizontal: DoubleArray): DoubleArray {
+            // x = v0 + v1 y, y = h0 + h1 x  =>  x = v0 + v1 (h0 + h1 x)
+            val x = (vertical[0] + vertical[1] * horizontal[0]) / (1 - vertical[1] * horizontal[1])
+            return doubleArrayOf(x, horizontal[0] + horizontal[1] * x)
+        }
+        val tl = meet(left, top); val tr = meet(right, top); val br = meet(right, bottom); val bl = meet(left, bottom)
+        // The inner rectangle is the file's 8 % line: 84 % of the file wide, 1.077 content squares.
+        val pitch = (rows.map { it.pitch } + cols.map { it.pitch }).sorted().let { it[it.size / 2] }
+        val width = (Math.hypot(tr[0] - tl[0], tr[1] - tl[1]) + Math.hypot(br[0] - bl[0], br[1] - bl[1])) / 2
+        val height = (Math.hypot(bl[0] - tl[0], bl[1] - tl[1]) + Math.hypot(br[0] - tr[0], br[1] - tr[1])) / 2
+        if (width / pitch !in 72.0..96.0 || height / pitch !in 72.0..96.0) return null
+        val inner = TestChart.fileToContent(0.08f).toDouble()
+        val outer = TestChart.fileToContent(0.92f).toDouble()
+        val hm = homographyFrom(doubleArrayOf(inner, inner, outer, inner, outer, outer, inner, outer),
+            floatArrayOf(tl[0].toFloat(), tl[1].toFloat(), tr[0].toFloat(), tr[1].toFloat(), br[0].toFloat(), br[1].toFloat(), bl[0].toFloat(), bl[1].toFloat()))
+        val corners = FloatArray(8)
+        for ((idx, c) in listOf(0.0 to 0.0, 1.0 to 0.0, 1.0 to 1.0, 0.0 to 1.0).withIndex()) {
+            val p = map(hm, c.first, c.second)
+            corners[2 * idx] = p[0].toFloat(); corners[2 * idx + 1] = p[1].toFloat()
+        }
+        for (v in corners) if (v.isNaN()) return null
+        return if (validateGreys(photo, corners)) corners else null
+    }
 
     // ------------------------------------------------------------ Detection from the colour grid
 
