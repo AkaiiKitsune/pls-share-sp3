@@ -117,8 +117,12 @@ class ScreenshotTest {
             val scaled = Photos.scaledForEditing(chart, 2000)
             val k = scaled.width.toFloat() / chart.width
             val cornerPick = field(activity, "cornerPick") as CornerPickView
-            cornerPick.bitmap = scaled
-            for ((x, y) in listOf(639 to 1214, 2332 to 1226, 2320 to 2824, 627 to 2812)) cornerPick.corners += floatArrayOf(x * k, y * k)
+            val corners = FloatArray(8)
+            for ((i, p) in listOf(639 to 1214, 2332 to 1226, 2320 to 2824, 627 to 2812).withIndex()) { corners[2 * i] = p.first * k; corners[2 * i + 1] = p.second * k }
+            val add = MainActivity::class.java.getDeclaredMethod("addChartPhoto", Bitmap::class.java, FloatArray::class.java, Boolean::class.java).apply { isAccessible = true }
+            add.invoke(activity, scaled, corners, true)
+            // A second photo (the flash one) without corners, dimmed in the strip.
+            javaClass.getResourceAsStream("/chart-flash.jpg")?.use { android.graphics.BitmapFactory.decodeStream(it) }?.let { add.invoke(activity, Photos.scaledForEditing(it, 2000), null, false) }
             call(activity, "syncMeasureButtons")
             val reading = ChartReader.read(scaled, cornerPick.cornersArray()!!, FilmType.COLOR)
             val fit = ChartReader.fit(reading, FilmType.COLOR)

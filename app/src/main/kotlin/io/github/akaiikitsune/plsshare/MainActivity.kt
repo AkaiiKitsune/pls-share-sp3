@@ -83,8 +83,8 @@ class MainActivity : Activity() {
         private const val REQUEST_IMPORT_SETTINGS = 13
         private const val MENU_SETTINGS_EXPORT = 11
         private const val MENU_SETTINGS_IMPORT = 12
-        /** Longest side of the chart photo the reader works on (enough for 9×9 samples per patch). */
-        private const val CHART_PHOTO_SIDE = 2000
+        /** Longest side kept per chart photo: enough for 9×9 samples per patch, small enough for ten photos in memory. */
+        private const val CHART_PHOTO_SIDE = 1600
         private const val JOURNAL_LINES = 400
         private const val PREVIEW_SIZE = 800
         private const val UNDO_DEPTH = 40
@@ -135,8 +135,20 @@ class MainActivity : Activity() {
     private lateinit var measureColourCompare: ImageView
     private lateinit var hueReadout: TextView
     private var measuredFilm: FilmModel? = null
-    /** Readings of every photo measured so far, keyed by the photo, averaged before the fit. */
-    private val chartReadings = LinkedHashMap<Bitmap, ChartReader.Reading>()
+    /** One photo of the printed chart in the measurement screen: its corners, and its reading once measured with them. */
+    private class ChartPhoto(val bitmap: Bitmap, var corners: FloatArray?) {
+        var reading: ChartReader.Reading? = null
+        var readingCorners: FloatArray? = null
+        val complete get() = corners != null
+        var thumb: ImageView? = null
+    }
+
+    /** Every chart photo loaded so far; all those with corners are measured and averaged. */
+    private val chartPhotos = ArrayList<ChartPhoto>()
+    private var chartCurrent = -1
+    private lateinit var chartStrip: LinearLayout
+    private lateinit var chartStripScroll: HorizontalScrollView
+    private lateinit var chartStripHint: TextView
     private lateinit var measureWarped: ImageView
     private lateinit var measureWarpedLabel: TextView
     private var shootUri: Uri? = null
@@ -712,7 +724,13 @@ class MainActivity : Activity() {
                 mainHandler.post { result.onSuccess { collage.setCell(cell, it) }.onFailure { message(s.photoError.format(it.message ?: "")) } }
             }.start()
         }
-        if (requestCode == REQUEST_PICK_CHART && resultCode == RESULT_OK && data?.data != null) loadChartPhoto(data.data!!)
+        if (requestCode == REQUEST_PICK_CHART && resultCode == RESULT_OK && data != null) {
+            val uris = ArrayList<Uri>()
+            val clip = data.clipData
+            if (clip != null) for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri
+            else data.data?.let { uris += it }
+            loadChartPhotos(uris)
+        }
         if (requestCode == REQUEST_IMPORT_SETTINGS && resultCode == RESULT_OK && data?.data != null) importSettings(data.data!!)
         if (requestCode == REQUEST_SHOOT_CHART) {
             // The camera app is heavy: this process is often killed meanwhile, so the pending
@@ -726,7 +744,7 @@ class MainActivity : Activity() {
             if (file == null) {
                 if (resultCode == RESULT_OK) measureStatus(s.measureFailed.format("no capture file"))
             } else if (resultCode == RESULT_OK && file.length() > 0) {
-                loadChartPhoto(uri)
+                loadChartPhotos(listOf(uri))
             } else if (resultCode == RESULT_OK) {
                 measureStatus(s.measureFailed.format(s.measureEmptyCapture))
                 file.delete()
@@ -1006,18 +1024,27 @@ class MainActivity : Activity() {
         val shoot = ui.softButton(s.measureShoot) { shootChartPhoto() }
         root.addView(ui.row(pick, shoot), LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 12)
+        // The photos loaded so far: tap one to check or fix its corners, long-press to drop it.
+        chartStrip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        chartStripScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(chartStrip, LinearLayout.LayoutParams(ui.wrap, ui.wrap))
+            visibility = View.GONE
+        }
+        root.addView(chartStripScroll, LinearLayout.LayoutParams(ui.match, ui.wrap))
+        chartStripHint = ui.text(s.measureStripHint, 12f, alpha = 0.6f).apply { visibility = View.GONE }
+        root.addView(chartStripHint, LinearLayout.LayoutParams(ui.match, ui.wrap).apply { topMargin = ui.dp(6) })
+        ui.space(root, 10)
         cornerPick = CornerPickView(this).apply {
             background = ui.rounded(Ui.CARD, 12)
             clipToOutline = true
-            onChanged = { syncMeasureButtons() }
+            onChanged = { onChartCornersChanged() }
         }
         root.addView(cornerPick, LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 8)
         root.addView(ui.text(s.measureHint, 12f, alpha = 0.6f))
-        ui.space(root, 6)
-        root.addView(ui.text(s.measureAddHint, 12f, alpha = 0.6f))
         ui.space(root, 12)
-        measureResetButton = ui.softButton(s.measureReset) { cornerPick.reset(); chartReadings.clear(); hideMeasureResult() }
+        measureResetButton = ui.softButton(s.measureReset) { resetChartPhotos() }
         measureRunButton = ui.primaryButton(s.measureRun) { runMeasure() }
         root.addView(ui.row(measureResetButton, measureRunButton), LinearLayout.LayoutParams(ui.match, ui.wrap))
         ui.space(root, 16)
@@ -1085,10 +1112,11 @@ class MainActivity : Activity() {
     }
 
     private fun syncMeasureButtons() {
-        val hasPhoto = cornerPick.bitmap != null
-        ui.setEnabledLook(measureResetButton, hasPhoto && cornerPick.corners.isNotEmpty())
-        ui.setEnabledLook(measureRunButton, hasPhoto && cornerPick.complete)
-        if (!cornerPick.complete) hideMeasureResult()
+        val any = chartPhotos.isNotEmpty()
+        ui.setEnabledLook(measureResetButton, any)
+        ui.setEnabledLook(measureRunButton, chartPhotos.any { it.complete })
+        chartStripScroll.visibility = if (any) View.VISIBLE else View.GONE
+        chartStripHint.visibility = if (any) View.VISIBLE else View.GONE
     }
 
     private fun hideMeasureResult() {
@@ -1096,13 +1124,86 @@ class MainActivity : Activity() {
         measureResultBox.visibility = View.GONE
     }
 
+    private fun resetChartPhotos() {
+        chartPhotos.clear()
+        chartCurrent = -1
+        chartStrip.removeAllViews()
+        cornerPick.bitmap = null
+        hideMeasureResult()
+        syncMeasureButtons()
+    }
+
+    /** The picker's corners moved: keep them on the current photo, and its reading is stale. */
+    private fun onChartCornersChanged() {
+        val entry = chartPhotos.getOrNull(chartCurrent) ?: return
+        entry.corners = cornerPick.cornersArray()
+        if (entry.readingCorners?.contentEquals(entry.corners ?: FloatArray(0)) != true) { entry.reading = null; hideMeasureResult() }
+        refreshChartThumb(entry)
+        syncMeasureButtons()
+    }
+
+    private fun selectChartPhoto(index: Int) {
+        val entry = chartPhotos.getOrNull(index) ?: return
+        chartCurrent = index
+        cornerPick.bitmap = entry.bitmap
+        entry.corners?.let { c -> for (k in 0 until 4) cornerPick.corners += floatArrayOf(c[2 * k], c[2 * k + 1]) }
+        cornerPick.invalidate()
+        for (e in chartPhotos) refreshChartThumb(e)
+        entry.thumb?.let { t -> chartStripScroll.post { chartStripScroll.smoothScrollTo(t.left - ui.dp(20), 0) } }
+    }
+
+    /** Selected: accent frame; without corners: dimmed, so the ones to fix stand out. */
+    private fun refreshChartThumb(entry: ChartPhoto) {
+        val t = entry.thumb ?: return
+        val selected = chartPhotos.indexOf(entry) == chartCurrent
+        t.alpha = if (entry.complete) 1f else 0.45f
+        t.background = ui.rounded(if (selected) ui.accent else Ui.CARD, 12)
+    }
+
+    private fun addChartPhoto(bitmap: Bitmap, corners: FloatArray?, select: Boolean) {
+        val entry = ChartPhoto(bitmap, corners)
+        chartPhotos += entry
+        val thumb = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            setPadding(ui.dp(3), ui.dp(3), ui.dp(3), ui.dp(3))
+            setImageBitmap(Photos.scaledForEditing(bitmap, 160))
+            setOnClickListener { selectChartPhoto(chartPhotos.indexOf(entry)) }
+            setOnLongClickListener { removeChartPhoto(entry); true }
+            tooltipText = s.measureStripHint
+        }
+        entry.thumb = thumb
+        chartStrip.addView(thumb, LinearLayout.LayoutParams(ui.dp(72), ui.dp(72)).apply { marginEnd = ui.dp(8) })
+        refreshChartThumb(entry)
+        hideMeasureResult()
+        if (select || chartCurrent < 0) selectChartPhoto(chartPhotos.size - 1)
+        syncMeasureButtons()
+    }
+
+    private fun removeChartPhoto(entry: ChartPhoto) {
+        val index = chartPhotos.indexOf(entry)
+        if (index < 0) return
+        chartPhotos.removeAt(index)
+        chartStrip.removeView(entry.thumb)
+        hideMeasureResult()
+        when {
+            chartPhotos.isEmpty() -> { chartCurrent = -1; cornerPick.bitmap = null }
+            index == chartCurrent -> selectChartPhoto(minOf(index, chartPhotos.size - 1))
+            index < chartCurrent -> chartCurrent--
+        }
+        syncMeasureButtons()
+    }
+
+    /** Several photos at once: they are loaded and aligned in the background, and appear in the strip as they come. */
     private fun pickChartPhoto() {
-        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Intent(MediaStore.ACTION_PICK_IMAGES)
-        else Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*")
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, 10)
+        } else {
+            Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
         startActivityForResult(intent, REQUEST_PICK_CHART)
     }
 
-    /** Take the photo with the camera app, straight into the gallery (a pending MediaStore entry, no file provider needed). */
     /**
      * Take the photo with the camera app, into a private cache file served by [CaptureProvider].
      * The write grant only covers the URIs in the intent's clip data, not the output extra, so the
@@ -1131,42 +1232,50 @@ class MainActivity : Activity() {
     /** What went wrong with the chart photo: a toast like any other message. */
     private fun measureStatus(text: String) = message(text)
 
-    private fun loadChartPhoto(uri: Uri) {
+    private fun loadChartPhotos(uris: List<Uri>) {
+        if (uris.isEmpty()) return
         setBusy(true)
+        val type = filmType
         Thread {
-            val result = runCatching {
-                val bitmap = Photos.scaledForEditing(Photos.load(contentResolver, uri), CHART_PHOTO_SIDE)
-                bitmap to runCatching { ChartReader.detectCorners(bitmap, filmType) }.getOrNull()
+            var found = 0; var failed = 0
+            for ((i, uri) in uris.withIndex()) {
+                val result = runCatching {
+                    val bitmap = Photos.scaledForEditing(Photos.load(contentResolver, uri), CHART_PHOTO_SIDE)
+                    bitmap to runCatching { ChartReader.detectCorners(bitmap, type) }.getOrNull()
+                }
+                mainHandler.post {
+                    result.onSuccess { (bitmap, corners) ->
+                        if (corners != null) found++
+                        addChartPhoto(bitmap, corners, select = i == 0)
+                        journal("chart photo: loaded ${bitmap.width}x${bitmap.height}, corners ${corners?.joinToString { Math.round(it).toString() } ?: "not found"}")
+                    }.onFailure { failed++; journal("chart photo: $uri: $it") }
+                }
             }
             mainHandler.post {
                 setBusy(false)
-                result.onSuccess { (bitmap, corners) ->
-                    cornerPick.bitmap = bitmap
-                    hideMeasureResult()
-                    if (corners != null) {
-                        for (k in 0 until 4) cornerPick.corners += floatArrayOf(corners[2 * k], corners[2 * k + 1])
-                        cornerPick.invalidate()
-                        toast(s.measureCornersFound)
-                    }
-                    syncMeasureButtons()
-                    journal("chart photo: loaded ${bitmap.width}x${bitmap.height}, corners ${corners?.joinToString { Math.round(it).toString() } ?: "not found"}")
-                }.onFailure { measureStatus(s.photoError.format(it.message ?: it.javaClass.simpleName)) }
+                when {
+                    failed > 0 -> measureStatus(s.photoError.format("$failed / ${uris.size}"))
+                    uris.size == 1 && found == 1 -> toast(s.measureCornersFound)
+                    uris.size > 1 -> toast(s.measureLoaded.format(uris.size, found))
+                }
             }
         }.start()
     }
 
     private fun runMeasure() {
-        val photo = cornerPick.bitmap ?: return
-        val corners = cornerPick.cornersArray() ?: return
+        val entries = chartPhotos.filter { it.complete }
+        if (entries.isEmpty()) return
+        val current = chartPhotos.getOrNull(chartCurrent)?.takeIf { it.complete } ?: entries[0]
         val type = filmType
         setBusy(true)
         Thread {
             val result = runCatching {
-                val own = ChartReader.read(photo, corners, type)
-                synchronized(chartReadings) { chartReadings[photo] = own }
-                val all = synchronized(chartReadings) { chartReadings.values.toList() }
-                val reading = ChartReader.average(all)
-                Triple(own, reading, ChartReader.fit(reading, type))
+                for (e in entries) {
+                    val c = e.corners!!
+                    if (e.reading == null || e.readingCorners?.contentEquals(c) != true) { e.reading = ChartReader.read(e.bitmap, c, type); e.readingCorners = c.clone() }
+                }
+                val reading = ChartReader.average(entries.map { it.reading!! })
+                Triple(current.reading!!, reading, ChartReader.fit(reading, type))
             }
             mainHandler.post {
                 setBusy(false)
@@ -1174,7 +1283,7 @@ class MainActivity : Activity() {
                     val model = fit.model
                     measuredFilm = model
                     measureWarped.setImageBitmap(own.warped)
-                    val count = chartReadings.size
+                    val count = entries.size
                     measureReport.text = (if (count > 1) s.measurePhotos.format(count) + " " else "") + s.measureResult.format("%.1f %%".format(fit.greyRms))
                     measureCompare.setImageBitmap(comparisonStrip(reading, model))
                     val colour = !type.monochrome && reading.patches.isNotEmpty()

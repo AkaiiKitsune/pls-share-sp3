@@ -214,7 +214,9 @@ class Strings private constructor(private val fr: Boolean) {
         "Imprimez la mire, photographiez le tirage à plat avec le cadre blanc entièrement visible, puis indiquez les quatre coins de la zone image. L'appli lit les gris et les couleurs, les rapporte au blanc du cadre (ce qui annule la lumière, jour ou flash) et en déduit les réglages du film.",
         "Print the chart, photograph the print flat with the white frame fully visible, then mark the four corners of the image area. The app reads the greys and colours, relates them to the frame's white (which cancels the light, daylight or flash) and derives the film settings.",
     )
-    val measurePick get() = t("Choisir une photo", "Choose a photo")
+    val measurePick get() = t("Choisir des photos", "Choose photos")
+    val measureStripHint get() = t("Touchez une photo pour vérifier ou corriger ses coins ; les photos grisées n'ont pas de coins. Appui long pour la retirer. « Mesurer » moyenne toutes les photos qui ont leurs coins.", "Tap a photo to check or fix its corners; dimmed photos have none. Long-press to drop it. “Measure” averages every photo that has its corners.")
+    val measureLoaded get() = t("%d photos chargées, coins trouvés sur %d.", "%d photos loaded, corners found on %d.")
     val measureShoot get() = t("Photographier", "Take a photo")
     val measureHint get() = t("Les coins sont placés automatiquement d'après la grille de couleurs : vérifiez-les à la loupe en faisant glisser un repère. Sinon, touchez les quatre coins de la zone image (pas du cadre), dans l'ordre : haut gauche, haut droit, bas droit, bas gauche. Lumière du jour, sans reflet, le cadre blanc entièrement visible.", "The corners are placed automatically from the colour grid: check them with the loupe by dragging a marker. Otherwise tap the four corners of the image area (not the frame), in order: top left, top right, bottom right, bottom left. Daylight, no glare, the white frame fully visible.")
     val measureReset get() = t("Recommencer", "Start over")
@@ -236,7 +238,6 @@ class Strings private constructor(private val fr: Boolean) {
     val measureWarped get() = t("Mire redressée : les paliers et les patches doivent tomber bien dans leurs cases, sinon ajustez les coins.", "Rectified chart: the steps and patches must sit squarely in their cells; otherwise adjust the corners.")
     val measureCornersFound get() = t("Coins détectés, vérifiez-les.", "Corners detected, check them.")
     val measurePhotos get() = t("Moyenne de %d photos.", "Average of %d photos.")
-    val measureAddHint get() = t("Pour affiner, chargez une autre photo du même tirage et mesurez de nouveau : les lectures sont moyennées. « Recommencer » les efface.", "To refine, load another photo of the same print and measure again: the readings are averaged. “Start over” clears them.")
     val shareShortcut get() = t("Imprimer sur SP-3", "Print on SP-3")
     val shareShortcutLong get() = t("Imprimer sur l'instax SHARE SP-3", "Print on the instax SHARE SP-3")
     val menuSettingsExport get() = t("Exporter les réglages…", "Export settings…")
