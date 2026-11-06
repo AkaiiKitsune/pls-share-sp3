@@ -103,15 +103,18 @@ class GeometryTest {
         // Without the card: a 2° trim alone pre-warps; the top-right corner's pixel comes from further anticlockwise in the image.
         val image = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
         image.setPixels(IntArray(200 * 200) { Color.rgb(it % 200, it / 200, 0) }, 0, 200, 0, 0, 200, 200) // x in red, y in green
-        val g = PrinterGeometry().apply { rotationTrim = 2f }
-        assertTrue(g.measured)
+        val g = PrinterGeometry().apply { rotation = 2f }
+        assertTrue(g.measured && g.rotationByHand)
+        assertEquals(2f, g.rotation, 0f)
         val warped = g.prewarp(image)
         val p = warped.getPixel(150, 50) // file (0.75, 0.25)
         val t = Math.toRadians(2.0)
         val ex = (Math.cos(t) * 0.25 - Math.sin(t) * -0.25 + 0.5) * 199; val ey = (Math.sin(t) * 0.25 + Math.cos(t) * -0.25 + 0.5) * 199
         assertEquals(ex, Color.red(p).toDouble(), 1.5); assertEquals(ey, Color.green(p).toDouble(), 1.5)
         // With the card: the trim adds to the measured rotation, so a trim that cancels it prints the file as if it were straight.
-        val placed = PrinterGeometry().apply { card = cardFor(1.5, 64f, 36f, 37f); cutTop = 0.02f; cutBottom = 0.02f; cutLeft = 0.02f; cutRight = 0.02f; rotationTrim = -1.5f }
+        val placed = PrinterGeometry().apply { card = cardFor(1.5, 64f, 36f, 37f); cutTop = 0.02f; cutBottom = 0.02f; cutLeft = 0.02f; cutRight = 0.02f }
+        assertEquals(1.5f, placed.rotation, 0.02f) // the slider starts on the measured value
+        placed.rotation = 0f // set by hand to nothing: the file is taken to land straight
         val straight = placed.prewarp(image)
         val centre = straight.getPixel(100, 100)
         assertEquals(100f, Color.red(centre).toFloat(), 2f); assertEquals(100f, Color.green(centre).toFloat(), 2f)

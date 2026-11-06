@@ -964,7 +964,7 @@ class MainActivity : Activity() {
         // Rotation by hand, on top of the measured one: ±3° in tenths.
         root.addView(ui.text(s.geometryRotationHint, 12f, alpha = 0.7f))
         ui.space(root, 6)
-        geometrySlider(s.geometryRotation, -3f, 0.1f, 60, { "%+.1f°".format(it) }, { geometry.rotationTrim }) { geometry.rotationTrim = if (Math.abs(it) < 0.05f) 0f else it }
+        geometrySlider(s.geometryRotation, -5f, 0.1f, 100, { "%+.1f°".format(it) }, { geometry.rotation }) { geometry.rotation = it }
         ui.space(root, 6)
         geometryToggle = ui.softButton(s.geometryCompensate) {
             geometry.compensate = !geometry.compensate
@@ -1144,7 +1144,7 @@ class MainActivity : Activity() {
         o.put("geometry", org.json.JSONObject().put("stepTop", geometry.stepTop.toDouble()).put("gradientBottom", geometry.gradientBottom.toDouble())
             .put("stepLeft", geometry.stepLeft.toDouble()).put("patchRight", geometry.patchRight.toDouble()).put("compensate", geometry.compensate)
             .put("cutTop", geometry.cutTop.toDouble()).put("cutBottom", geometry.cutBottom.toDouble()).put("cutLeft", geometry.cutLeft.toDouble()).put("cutRight", geometry.cutRight.toDouble())
-            .put("card", geometry.card?.let { PrinterGeometry.cardText(it) } ?: "").put("rotationTrim", geometry.rotationTrim.toDouble()))
+            .put("card", geometry.card?.let { PrinterGeometry.cardText(it) } ?: "").put("rotationSet", if (geometry.rotationByHand) geometry.rotationSet.toDouble() else org.json.JSONObject.NULL))
         o.put("filmType", filmType.key)
         return o
     }
@@ -1195,7 +1195,7 @@ class MainActivity : Activity() {
                     geometry.cutTop = g.optDouble("cutTop", geometry.cutTop.toDouble()).toFloat(); geometry.cutBottom = g.optDouble("cutBottom", geometry.cutBottom.toDouble()).toFloat()
                     geometry.cutLeft = g.optDouble("cutLeft", geometry.cutLeft.toDouble()).toFloat(); geometry.cutRight = g.optDouble("cutRight", geometry.cutRight.toDouble()).toFloat()
                     if (g.has("card")) geometry.card = g.optString("card", "").takeIf { it.isNotEmpty() }?.let { PrinterGeometry.parseCard(it) }
-                    geometry.rotationTrim = g.optDouble("rotationTrim", geometry.rotationTrim.toDouble()).toFloat()
+                    if (g.has("rotationSet")) geometry.rotationSet = if (g.isNull("rotationSet")) Float.NaN else g.optDouble("rotationSet").toFloat()
                     geometry.save(prefs)
                 }
                 film = FilmModel.load(prefs, filmType)
@@ -2010,7 +2010,7 @@ class MainActivity : Activity() {
         film.save(prefs)
         if (geo != null) geometry.set(geo)
         if (ring != null) geometry.setCuts(ring)
-        if (card != null) geometry.card = card
+        if (card != null) { geometry.card = card; geometry.rotationSet = Float.NaN }
         if (geo != null || ring != null || card != null) geometry.save(prefs)
         syncCalibration()
         applyFilmModel()

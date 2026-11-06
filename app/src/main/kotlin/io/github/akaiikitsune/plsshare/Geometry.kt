@@ -39,8 +39,8 @@ class PrinterGeometry(
     var cutRight: Float = 0f,
     /** The card's corners (top-left, top-right, bottom-right, bottom-left) in file coordinates, or null. */
     var card: FloatArray? = null,
-    /** Rotation entered by hand, in degrees clockwise, on top of the measured one (as if the printer turned the file that much more). */
-    var rotationTrim: Float = 0f,
+    /** The rotation set by hand, in degrees clockwise, replacing the measured one; NaN while the measurement stands. */
+    var rotationSet: Float = Float.NaN,
 ) {
     companion object {
         /** File positions of the chart's reference lines (content positions through [TestChart.contentToFile]). */
@@ -63,7 +63,7 @@ class PrinterGeometry(
             prefs.getFloat(PREFIX + "cutTop", 0f), prefs.getFloat(PREFIX + "cutBottom", 0f),
             prefs.getFloat(PREFIX + "cutLeft", 0f), prefs.getFloat(PREFIX + "cutRight", 0f),
             prefs.getString(PREFIX + "card", null)?.let { parseCard(it) },
-            prefs.getFloat(PREFIX + "rotationTrim", 0f),
+            prefs.getFloat(PREFIX + "rotationSet", Float.NaN),
         )
 
         fun parseCard(text: String): FloatArray? = runCatching {
@@ -80,7 +80,7 @@ class PrinterGeometry(
             .putBoolean(PREFIX + "compensate", compensate)
             .putFloat(PREFIX + "cutTop", cutTop).putFloat(PREFIX + "cutBottom", cutBottom).putFloat(PREFIX + "cutLeft", cutLeft).putFloat(PREFIX + "cutRight", cutRight)
             .putString(PREFIX + "card", card?.let { cardText(it) })
-            .putFloat(PREFIX + "rotationTrim", rotationTrim)
+            .putFloat(PREFIX + "rotationSet", rotationSet)
             .apply()
     }
 
@@ -88,7 +88,7 @@ class PrinterGeometry(
         stepTop = STEP_TOP_FILE; gradientBottom = GRADIENT_BOTTOM_FILE; stepLeft = STEP_LEFT_FILE; patchRight = PATCH_RIGHT_FILE
         cutTop = 0f; cutBottom = 0f; cutLeft = 0f; cutRight = 0f
         card = null
-        rotationTrim = 0f
+        rotationSet = Float.NaN
     }
 
     /** Whether the frame's cuts were entered. */
@@ -110,7 +110,7 @@ class PrinterGeometry(
         Math.abs(stepLeft - STEP_LEFT_FILE) > 1e-4f || Math.abs(patchRight - PATCH_RIGHT_FILE) > 1e-4f
 
     /** Whether anything was measured or entered that changes prints. */
-    val measured: Boolean get() = linesMeasured || card != null || rotationTrim != 0f
+    val measured: Boolean get() = linesMeasured || card != null || rotationByHand
 
     /** Vertical scale of the print relative to the file (1.03 = 3 % taller). */
     val stretch: Float get() = (gradientBottom - stepTop) / (GRADIENT_BOTTOM_FILE - STEP_TOP_FILE)
@@ -160,6 +160,17 @@ class PrinterGeometry(
         val bottom = Math.atan2((q[2][1] - q[3][1]).toDouble(), (q[2][0] - q[3][0]).toDouble())
         return Math.toDegrees((top + bottom) / 2).toFloat()
     }
+
+    /** Whether the rotation was set by hand rather than measured. */
+    val rotationByHand: Boolean get() = !rotationSet.isNaN()
+
+    /** The rotation the printer is taken to apply, in degrees clockwise: the one set by hand, else the measured one (0 without the card). */
+    var rotation: Float
+        get() = if (rotationByHand) rotationSet else if (card != null) rotationDegrees else 0f
+        set(value) { rotationSet = value }
+
+    /** What the hand-set rotation adds to the measured one, in degrees. */
+    private val rotationTrim: Float get() = rotation - (if (card != null) rotationDegrees else 0f)
 
     /** The printed file's bottom width relative to its top width, minus one (negative: narrower at the bottom). */
     val keystone: Float get() {
