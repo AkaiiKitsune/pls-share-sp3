@@ -168,6 +168,9 @@ class Strings private constructor(private val fr: Boolean) {
     val filmColor get() = t("Couleur", "Colour")
     val filmMono get() = t("Monochrome", "Monochrome")
     val filmTypeLabel get() = t("Film", "Film")
+    val filmChipColor get() = t("Film couleur", "Colour film")
+    val filmChipMono get() = t("Film monochrome", "Monochrome film")
+    val filmTypeTip get() = t("Le film chargé dans l'imprimante : aperçu, calibration et données envoyées s'y adaptent.", "The film loaded in the printer: preview, calibration and the data sent follow it.")
     val calibrateTitleFor get() = t("Calibrer : film %s", "Calibrate: %s film")
     val monoNote get() = t("Film monochrome : la couleur n'est pas imprimée, l'aperçu et les réglages de couleur sont masqués.", "Monochrome film: colour is not printed, the preview and the colour controls are hidden.")
 

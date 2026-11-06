@@ -138,7 +138,7 @@ class MainActivity : Activity() {
     private var compensate = false
     private var filmType = FilmType.COLOR
     private var chartBase: Bitmap? = null
-    private lateinit var filmTypeSelector: Ui.Segmented
+    private lateinit var filmChip: Button
     private lateinit var calibrationTitle: TextView
     private lateinit var monoNoteView: TextView
     /** Views of the editor that only make sense on colour film. */
@@ -382,15 +382,17 @@ class MainActivity : Activity() {
             addView(previewHint, FrameLayout.LayoutParams(ui.wrap, ui.wrap, Gravity.CENTER))
         }
         root.addView(previewFrame)
-        filmTypeSelector = ui.Segmented(listOf(s.filmColor, s.filmMono)) { index -> setFilmType(if (index == 0) FilmType.COLOR else FilmType.MONO) }
-        val filmRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(ui.text(s.filmTypeLabel, 14f), LinearLayout.LayoutParams(ui.wrap, ui.wrap).apply { marginEnd = ui.dp(12) })
-            addView(filmTypeSelector.view, LinearLayout.LayoutParams(0, ui.wrap, 1f))
+        // The film loaded in the printer: a small chip under the print, with a swatch of the film's
+        // look; tapping it offers the two films. Changed rarely, so it stays out of the way.
+        filmChip = ui.softButton("") { showFilmMenu(filmChip) }.apply {
+            tooltipText = s.filmTypeTip
+            compoundDrawablePadding = ui.dp(8)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            minimumHeight = ui.dp(36)
+            setPadding(ui.dp(12), 0, ui.dp(14), 0)
         }
-        root.addView(filmRow)
-        ui.space(root, 12)
+        root.addView(filmChip, LinearLayout.LayoutParams(ui.wrap, ui.dp(36)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = ui.dp(2) })
+        ui.space(root, 14)
 
         pickButton = ui.softButton(s.pickPhoto) { pickPhoto() }
         editButton = ui.softButton(s.edit) { openEditor() }
@@ -2145,10 +2147,41 @@ class MainActivity : Activity() {
         if (container.getChildAt(0) === editorScreen) { buildThumbnails(editorView.bitmap ?: return); editorView.invalidateFrame() }
     }
 
+    /** A small round swatch of the film's look: a hue wheel for colour film, a grey ramp for monochrome. */
+    private fun filmSwatch(mono: Boolean): android.graphics.drawable.Drawable {
+        val size = ui.dp(16)
+        val d = if (mono) android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFF202020.toInt(), 0xFF9A9A9A.toInt(), 0xFFF4F4F4.toInt()),
+        ).apply { shape = android.graphics.drawable.GradientDrawable.OVAL }
+        else object : android.graphics.drawable.Drawable() {
+            private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun draw(canvas: Canvas) {
+                val b = bounds
+                paint.shader = android.graphics.SweepGradient(b.exactCenterX(), b.exactCenterY(),
+                    intArrayOf(0xFFE05050.toInt(), 0xFFF0C040.toInt(), 0xFF50B060.toInt(), 0xFF40A8D0.toInt(), 0xFF5060D0.toInt(), 0xFFC050B0.toInt(), 0xFFE05050.toInt()), null)
+                canvas.drawCircle(b.exactCenterX(), b.exactCenterY(), b.width() / 2f, paint)
+            }
+            override fun setAlpha(alpha: Int) {}
+            override fun setColorFilter(filter: android.graphics.ColorFilter?) {}
+            @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+        }
+        d.setBounds(0, 0, size, size)
+        return d
+    }
+
+    private fun showFilmMenu(anchor: View) {
+        val menu = PopupMenu(this, anchor)
+        menu.menu.add(0, 0, 0, s.filmChipColor).apply { isCheckable = true; isChecked = !filmType.monochrome }
+        menu.menu.add(0, 1, 1, s.filmChipMono).apply { isCheckable = true; isChecked = filmType.monochrome }
+        menu.setOnMenuItemClickListener { item -> setFilmType(if (item.itemId == 1) FilmType.MONO else FilmType.COLOR); true }
+        menu.show()
+    }
+
     /** Show or hide what only applies to colour film, everywhere. */
     private fun applyFilmType() {
         val mono = filmType.monochrome
-        filmTypeSelector.select(if (mono) 1 else 0)
+        filmChip.text = (if (mono) s.filmChipMono else s.filmChipColor) + "  ▾"
+        filmChip.setCompoundDrawablesRelative(filmSwatch(mono), null, null, null)
         for (v in colourOnlyViews) v.visibility = if (mono) View.GONE else View.VISIBLE
         for (v in colourOnlyCal) v.visibility = if (mono) View.GONE else View.VISIBLE
         monoNoteView.visibility = if (mono) View.VISIBLE else View.GONE
