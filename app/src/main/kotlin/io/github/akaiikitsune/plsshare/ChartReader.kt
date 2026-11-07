@@ -1065,6 +1065,7 @@ object ChartReader {
                 m.hueValue[k] = (m.hueValue[k] * Math.exp((valueSum[k] / weight[k]).toDouble()).toFloat()).coerceIn(0.3f, 1.5f)
             }
         }
+        m.constrainHueShifts()
         // The gains express deviations from the global saturation: fold their common part into it.
         val mean = Math.exp(m.hueGain.sumOf { Math.log(it.toDouble()) } / FilmModel.HUES).toFloat()
         if (mean > 0.5f && mean < 2f) {

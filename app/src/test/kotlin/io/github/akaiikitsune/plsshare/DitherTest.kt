@@ -48,7 +48,10 @@ class DitherTest {
             val d = Math.abs(Color.red(ditheredPrint[y * w + x]) - x)
             assertTrue("pixel ($x,$y) off by $d on paper", d <= 10)
         }
-        assertEquals(Color.rgb(0, 0, 0) and 0xFFFFFF, plain[0] and 0xFFFFFF)
+        // A black input compensates to a level on the film's black plateau (its end, so that the
+        // darks stay continuous with the shadows just above), and prints as the film's black.
+        assertEquals(plainPrint[0] and 0xFFFFFF, intArrayOf(Color.rgb(0, 0, 0)).also { m.simulate(it) }[0] and 0xFFFFFF)
+        assertTrue("black stays on the plateau: ${Color.red(plain[0])}", Color.red(plain[0]) <= Math.round(m.blackClip * 255) + 1)
     }
 
     @Test

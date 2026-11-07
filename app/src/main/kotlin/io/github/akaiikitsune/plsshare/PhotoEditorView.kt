@@ -56,7 +56,7 @@ class PhotoEditorView(context: Context) : View(context) {
 
     /** What the print will look like: the film applied to the data we send (compensated or not). */
     private fun simulateFilm(pixels: IntArray) {
-        film.simulateFast(pixels, compensated)
+        film.simulateFast(pixels, compensated) { frameDirty = true; invalidate() }
     }
 
     /** Show the photo without any look (same framing), while a "compare" button is held. */

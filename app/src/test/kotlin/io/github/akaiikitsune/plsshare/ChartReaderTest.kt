@@ -1,6 +1,7 @@
 package io.github.akaiikitsune.plsshare
 
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -185,7 +186,18 @@ class ChartReaderTest {
         // Flash flare lifts the midtones more than daylight does; both must still read as a lift, not a darkening.
         assertTrue("midtones lift (gamma < 1) in both", md.gamma < 1f && mf.gamma < 1f)
         assertTrue("blacks block up early in both", md.blackClip >= 0.1f && mf.blackClip >= 0.1f)
-        assertTrue("desaturated in both", md.saturation < 0.95f && mf.saturation < 0.95f)
+        // Desaturated in both: the matrix and the global saturation share it, so judge the rendering of the vivid patches.
+        fun chromaRatio(m: FilmModel): Float {
+            var ratio = 0f; var n = 0
+            for (src in TestChart.patches.take(8)) {
+                val px = intArrayOf(src); m.simulate(px)
+                val cs = (maxOf(Color.red(src), Color.green(src), Color.blue(src)) - minOf(Color.red(src), Color.green(src), Color.blue(src))).toFloat()
+                val co = (maxOf(Color.red(px[0]), Color.green(px[0]), Color.blue(px[0])) - minOf(Color.red(px[0]), Color.green(px[0]), Color.blue(px[0]))).toFloat()
+                ratio += co / cs; n++
+            }
+            return ratio / n
+        }
+        assertTrue("desaturated in both: %.2f %.2f".format(chromaRatio(md), chromaRatio(mf)), chromaRatio(md) < 0.95f && chromaRatio(mf) < 0.95f)
         assertTrue("warm blacks in both", md.shadowWarmth > 0.2f && mf.shadowWarmth > 0.2f)
         // The two photos differ in light, angle and flare; the fits must stay in the same ballpark.
         assertEquals("black level agrees", md.blackLevel, mf.blackLevel, 0.10f)
@@ -223,7 +235,8 @@ class FilmLutTest {
             println("lut (compensated=$compensated): mean error %.2f, worst $worst".format(sum.toDouble() / src.size))
             // The inverse tone curves and the hue inverse have steps that the grid smooths a little.
             assertTrue("mean error small", sum.toDouble() / src.size < 2.5)
-            assertTrue("worst error bounded", worst <= 48)
+            // The gamut projection bends the compensation at the film's gamut boundary, where the grid interpolates across the bend.
+            assertTrue("worst error bounded", worst <= 64)
         }
     }
 

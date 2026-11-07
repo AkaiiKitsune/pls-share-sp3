@@ -85,6 +85,8 @@ class FilmModel(
         const val HUES = 6
         val HUE_NAMES = listOf("R", "Y", "G", "C", "B", "M")
         val IDENTITY = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        /** The most two neighbouring hue sectors' shifts may differ, in degrees (see [constrainHueShifts]). */
+        const val MAX_HUE_STEP = 36f
 
         /** RGB (0..255) to hue (0..360), saturation and value (0..1), into [out]. */
         fun rgbToHsv(r: Int, g: Int, b: Int, out: FloatArray) {
@@ -178,6 +180,7 @@ class FilmModel(
                 for (i in 0 until minOf(HUES, a.length())) table[i] = a.optDouble(i, table[i].toDouble()).toFloat()
             }
             o.optJSONArray("crosstalk")?.let { a -> if (a.length() == 9) for (i in 0 until 9) m.crosstalk[i] = a.optDouble(i, m.crosstalk[i].toDouble()).toFloat() }
+            m.constrainHueShifts()
             return m
         }
 
@@ -193,6 +196,7 @@ class FilmModel(
             m.printSharpness = f("printSharpness", m.printSharpness)
             for (i in 0 until HUES) { m.hueShift[i] = f("hueShift$i", 0f); m.hueGain[i] = f("hueGain$i", 1f); m.hueValue[i] = f("hueValue$i", 1f) }
             for (i in 0 until 9) m.crosstalk[i] = f("crosstalk$i", IDENTITY[i])
+            m.constrainHueShifts()
             return m
         }
     }
@@ -237,8 +241,41 @@ class FilmModel(
 
     fun resetHueTables() { hueShift.fill(0f); hueGain.fill(1f); hueValue.fill(1f) }
 
-    /** The brightness factor of a colour of saturation [s] at hue [h]: 1 for neutrals, the sector's value gain when fully saturated. */
-    private fun valueFactor(h: Float, s: Float): Float = 1f - (1f - sectorValue(hueValue, h)) * s * hueWeight(s)
+    /**
+     * Keeps the hue mapping invertible: the shifted hue is piecewise linear with slope
+     * 1 + (next − this) / 60 across each sector, so two neighbouring sectors may not differ by
+     * more than 36° (slope 0.4 at least), else the mapping folds back and a band of output hues
+     * becomes unreachable, a hole in the film's gamut that the compensation then falls into.
+     * Differences beyond that are split between the two sectors, until none remains.
+     */
+    fun constrainHueShifts() {
+        repeat(20) {
+            var changed = false
+            for (i in 0 until HUES) {
+                val j = (i + 1) % HUES
+                val d = hueShift[j] - hueShift[i]
+                if (Math.abs(d) > MAX_HUE_STEP) {
+                    val excess = (Math.abs(d) - MAX_HUE_STEP) / 2 * Math.signum(d)
+                    hueShift[i] += excess; hueShift[j] -= excess
+                    changed = true
+                }
+            }
+            if (!changed) return
+        }
+    }
+
+    /**
+     * The brightness factor of a colour of saturation [s] and value [v] at hue [h]: 1 for
+     * neutrals, the sector's value gain when fully saturated, and nothing in the shadows (below
+     * 12 % of value, with a ramp to 35 %), where the film's black plateau swallows the difference
+     * anyway and a brightness correction would only swing the darks.
+     */
+    private fun valueFactor(h: Float, s: Float, v: Float): Float = 1f - (1f - sectorValue(hueValue, h)) * s * hueWeight(s) * darkWeight(v)
+
+    private fun darkWeight(v: Float): Float {
+        val t = ((v - 0.12f) / 0.23f).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
 
     /**
      * How much of the hue and saturation correction applies at saturation [s]: nothing on neutrals
@@ -299,7 +336,7 @@ class FilmModel(
                 val w = hueWeight(hsv[1])
                 h = hsv[0] + sectorValue(hueShift, hsv[0]) * w
                 s = hsv[1] * gainAt(hsv[0], w)
-                v = hsv[2] * valueFactor(hsv[0], hsv[1])
+                v = hsv[2] * valueFactor(hsv[0], hsv[1], hsv[2])
             } else {
                 var sin = hsv[1]
                 var hin = hsv[0]
@@ -310,7 +347,7 @@ class FilmModel(
                 }
                 h = hin
                 s = sin
-                v = hsv[2] / valueFactor(h, s).coerceAtLeast(0.2f)
+                v = hsv[2] / valueFactor(h, s, hsv[2]).coerceAtLeast(0.2f)
             }
             pixels[i] = (p and 0xFF000000.toInt()) or (hsvToRgb(h, s.coerceIn(0f, 1f), v.coerceIn(0f, 1f)) and 0xFFFFFF)
         }
@@ -435,8 +472,35 @@ class FilmModel(
     /** What [compensateFractional] needs and should not recompute per pixel. */
     inner class CompensationContext {
         val forward = toneCurves()
+        /** The darkest and brightest greys the film shows, as luma, a little inside. */
+        val greyLow = 0.299f * forward[0][0] + 0.587f * forward[1][0] + 0.114f * forward[2][0] + 4f
+        val greyHigh = 0.299f * forward[0][255] + 0.587f * forward[1][255] + 0.114f * forward[2][255] - 4f
+        val matrix = colorMatrix().array
         val inverseMatrix = inverseColorMatrix().array
         val hsv = FloatArray(3)
+        val hsv2 = FloatArray(3)
+        val target = FloatArray(3)
+        val probe = FloatArray(3)
+        val best = FloatArray(3)
+        val trial = FloatArray(3)
+        val residual = FloatArray(3)
+        val f0 = FloatArray(3)
+        val jacobian = FloatArray(9)
+        val delta = FloatArray(3)
+        val solver = DoubleArray(12)
+        val reached = FloatArray(3)
+        val direct = FloatArray(3)
+        val second = FloatArray(3)
+        val grey = FloatArray(3)
+        val goal = FloatArray(3)
+        val clampedGoal = FloatArray(3)
+        /** The forward model's error on [x] against [goal], the goal clamped to what the film can show. */
+        fun lastError(x: FloatArray, goal: FloatArray): Float {
+            x.copyInto(probe); simulateFloat(probe, this)
+            var worst = 0f
+            for (k in 0 until 3) worst = maxOf(worst, Math.abs(probe[k] - goal[k].coerceIn(forward[k][0].toFloat(), forward[k][255].toFloat())))
+            return worst
+        }
     }
 
     /**
@@ -446,6 +510,16 @@ class FilmModel(
      * Levels the film cannot reach map to the nearest end of its range.
      */
     fun compensateFractional(rgb: FloatArray, ctx: CompensationContext) {
+        rgb.copyInto(ctx.target)
+        // The analytic inverse starts from what the film can show: a channel below its black
+        // would otherwise start at level 0, in the wrong basin for the Newton steps.
+        for (k in 0 until 3) rgb[k] = rgb[k].coerceIn(ctx.forward[k][0].toFloat(), ctx.forward[k][255].toFloat())
+        analyticInverse(rgb, ctx)
+        refine(rgb, ctx)
+    }
+
+    /** The stage-by-stage inverse of the model on one colour, in place: exact away from the plateaus and the gamut's edge, a starting point elsewhere. */
+    private fun analyticInverse(rgb: FloatArray, ctx: CompensationContext) {
         for (c in 0 until 3) rgb[c] = inverseToneFractional(ctx.forward[c], rgb[c])
         // Blue darkening, inverted.
         val a = if (type.monochrome) 0f else blueDarkening * 0.6f
@@ -475,16 +549,194 @@ class FilmModel(
                     hin = inverseHue(hsv[0], w)
                     sin = (hsv[1] / gainAt(hin, w).coerceAtLeast(0.2f)).coerceIn(0f, 1f)
                 }
-                val v = (hsv[2] / valueFactor(hin, sin).coerceAtLeast(0.2f)).coerceIn(0f, 1f)
+                val v = (hsv[2] / valueFactor(hin, sin, hsv[2]).coerceAtLeast(0.2f)).coerceIn(0f, 1f)
                 hsvToRgb(hin, sin, v, rgb)
             }
+        }
+    }
+
+    /**
+     * Makes a compensated colour the true inverse of the forward model, in place. Newton steps on
+     * [simulateFloat] from the analytic inverse (or from the target itself, when the forward
+     * model already maps that closer: the analytic inverse can land on a wrong branch of a steep
+     * hue table). When the film cannot reach the target at all, the colour is pulled towards the
+     * grey of the same luma until it can: the largest share of its colour that prints, found by
+     * bisection, so that neighbouring colours get neighbouring compensations (a "nearest"
+     * solution found by chance would tear the table at the film's gamut boundary).
+     */
+    private fun refine(rgb: FloatArray, ctx: CompensationContext) {
+        val target = ctx.target
+        val directErr = newton(rgb, target, ctx)
+        if (directErr < 3f) return
+        val reached = ctx.reached
+        // The grey of the target's luma, kept within the greys the film can show (a dark blue
+        // projects towards the darkest reachable grey, not towards a black it cannot print).
+        val l = (0.299f * target[0] + 0.587f * target[1] + 0.114f * target[2]).coerceIn(ctx.greyLow, ctx.greyHigh)
+        val grey = ctx.grey; grey[0] = l; grey[1] = l; grey[2] = l
+        val goal = ctx.goal
+        // The grey itself, from its own analytic inverse (the tone curves' plateaus make a start
+        // on the plateau hopeless: no slope to follow).
+        val direct = ctx.direct; rgb.copyInto(direct)
+        for (k in 0 until 3) rgb[k] = grey[k].coerceIn(ctx.forward[k][0].toFloat(), ctx.forward[k][255].toFloat())
+        analyticInverse(rgb, ctx)
+        val greyErr = newton(rgb, grey, ctx)
+        if (greyErr >= 3f) {
+            // Even the grey is out of reach (too dark or too bright): the closer attempt wins.
+            if (ctx.lastError(direct, target) <= ctx.lastError(rgb, target)) direct.copyInto(rgb)
+            return
+        }
+        rgb.copyInto(reached) // the solution for the share found so far (0: grey)
+        var lo = 0f; var hi = 1f
+        repeat(7) {
+            val mid = (lo + hi) / 2
+            for (k in 0 until 3) goal[k] = grey[k] + mid * (target[k] - grey[k])
+            // Two starts: the last share reached, then the goal's own analytic inverse.
+            reached.copyInto(rgb)
+            var err = newton(rgb, goal, ctx)
+            if (err >= 3f) {
+                val second = ctx.second
+                for (k in 0 until 3) second[k] = goal[k].coerceIn(ctx.forward[k][0].toFloat(), ctx.forward[k][255].toFloat())
+                analyticInverse(second, ctx)
+                val err2 = newton(second, goal, ctx)
+                if (err2 < err) { err = err2; second.copyInto(rgb) }
+            }
+            if (err >= 3f) {
+                val third = ctx.second; direct.copyInto(third)
+                val err3 = newton(third, goal, ctx)
+                if (err3 < err) { err = err3; third.copyInto(rgb) }
+            }
+            if (err < 3f) { lo = mid; rgb.copyInto(reached) } else hi = mid
+        }
+        reached.copyInto(rgb)
+    }
+
+    /**
+     * Newton steps from [c] (in/out) towards [goal] on the forward model: the 3×3 Jacobian by
+     * finite differences (one probe per channel, looking further when a channel sits on a
+     * plateau of its tone curve), the step solved from it (each channel alone when the system is
+     * singular), halved while it does not help. Returns the error that remains (the largest
+     * channel difference).
+     */
+    private fun newton(c: FloatArray, wanted: FloatArray, ctx: CompensationContext): Float {
+        val f = ctx.probe
+        // What the film can be asked for: a channel below its black or above its white is asked
+        // for that limit (the difference is unavoidable and must not count as a failure).
+        val goal = ctx.clampedGoal
+        for (k in 0 until 3) goal[k] = wanted[k].coerceIn(ctx.forward[k][0].toFloat(), ctx.forward[k][255].toFloat())
+        fun error(x: FloatArray): Float {
+            x.copyInto(f); simulateFloat(f, ctx)
+            return maxOf(Math.abs(f[0] - goal[0]), Math.abs(f[1] - goal[1]), Math.abs(f[2] - goal[2]))
+        }
+        var bestErr = error(c)
+        val fromGoal = error(goal)
+        if (fromGoal < bestErr) { goal.copyInto(c); bestErr = fromGoal }
+        val best = ctx.best; c.copyInto(best)
+        if (bestErr < 0.75f) return bestErr
+        val trial = ctx.trial; val e = ctx.residual; val f0 = ctx.f0; val j = ctx.jacobian; val delta = ctx.delta
+        repeat(20) {
+            c.copyInto(f); simulateFloat(f, ctx)
+            for (k in 0 until 3) { e[k] = goal[k] - f[k]; f0[k] = f[k] }
+            for (k in 0 until 3) {
+                c.copyInto(trial)
+                var d = if (c[k] <= 251f) 4f else -4f
+                trial[k] = c[k] + d
+                trial.copyInto(f); simulateFloat(f, ctx)
+                var own = (f[k] - f0[k]) / d
+                if (Math.abs(own) < 0.05f) {
+                    // On a plateau: look further, in the direction the residual wants.
+                    val far = if (e[k] >= 0f) 24f else -24f
+                    trial[k] = (c[k] + far).coerceIn(0f, 255f)
+                    val dd = trial[k] - c[k]
+                    if (Math.abs(dd) > 1f) { trial.copyInto(f); simulateFloat(f, ctx); d = dd; own = (f[k] - f0[k]) / d }
+                }
+                for (i in 0 until 3) j[i * 3 + k] = (f[i] - f0[i]) / d
+                j[k * 3 + k] = own
+            }
+            // Solve J · delta = e; then, if that step helps nowhere along its halvings, each
+            // channel on its own slope (the hue tables make the model kink at sector boundaries,
+            // where the full Jacobian can point the wrong way).
+            val full = solve3(j, e, delta, ctx.solver)
+            var improved = false
+            for (attempt in 0 until 2) {
+                if (attempt == 1 || !full) for (k in 0 until 3) delta[k] = if (Math.abs(j[k * 3 + k]) < 0.05f) 0f else e[k] / j[k * 3 + k]
+                var step = 1f
+                for (halving in 0 until 7) {
+                    for (k in 0 until 3) trial[k] = (c[k] + (step * delta[k]).coerceIn(-128f, 128f)).coerceIn(0f, 255f)
+                    val err = error(trial)
+                    if (err < bestErr - 0.01f) { bestErr = err; trial.copyInto(best); trial.copyInto(c); improved = true; break }
+                    step *= 0.5f
+                }
+                if (improved || !full) break
+            }
+            if (!improved || bestErr < 0.75f) { best.copyInto(c); return bestErr }
+        }
+        best.copyInto(c)
+        return bestErr
+    }
+
+    /** Solves a 3×3 system a·x = b into [x]; false when singular. */
+    private fun solve3(a: FloatArray, b: FloatArray, x: FloatArray, m: DoubleArray): Boolean {
+        for (r in 0 until 3) { m[r * 4] = a[r * 3].toDouble(); m[r * 4 + 1] = a[r * 3 + 1].toDouble(); m[r * 4 + 2] = a[r * 3 + 2].toDouble(); m[r * 4 + 3] = b[r].toDouble() }
+        for (col in 0 until 3) {
+            var pivot = col
+            for (r in col + 1 until 3) if (Math.abs(m[r * 4 + col]) > Math.abs(m[pivot * 4 + col])) pivot = r
+            if (pivot != col) for (k in 0 until 4) { val t = m[col * 4 + k]; m[col * 4 + k] = m[pivot * 4 + k]; m[pivot * 4 + k] = t }
+            val p = m[col * 4 + col]
+            if (Math.abs(p) < 1e-3) return false
+            for (k in col until 4) m[col * 4 + k] /= p
+            for (r in 0 until 3) if (r != col) { val factor = m[r * 4 + col]; if (factor != 0.0) for (k in col until 4) m[r * 4 + k] -= factor * m[col * 4 + k] }
+        }
+        for (r in 0 until 3) { if (m[r * 4 + 3].isNaN()) return false; x[r] = m[r * 4 + 3].toFloat() }
+        return true
+    }
+
+    /**
+     * The forward model on one colour in fractional levels, in place: the same stages as
+     * [simulate] (per-hue correction, colour matrix, blue darkening, tone curves interpolated
+     * between integer levels), used to check and refine the compensation.
+     */
+    fun simulateFloat(rgb: FloatArray, ctx: CompensationContext) {
+        if (!type.monochrome && hueCorrected) {
+            val hsv = ctx.hsv2
+            rgbToHsv(rgb[0], rgb[1], rgb[2], hsv)
+            if (hsv[1] >= 0.03f) {
+                val w = hueWeight(hsv[1])
+                val h = hsv[0] + sectorValue(hueShift, hsv[0]) * w
+                val sat = (hsv[1] * gainAt(hsv[0], w)).coerceIn(0f, 1f)
+                val v = (hsv[2] * valueFactor(hsv[0], hsv[1], hsv[2])).coerceIn(0f, 1f)
+                hsvToRgb(h, sat, v, rgb)
+            }
+        }
+        val m = ctx.matrix
+        val r = rgb[0]; val g = rgb[1]; val b = rgb[2]
+        rgb[0] = (m[0] * r + m[1] * g + m[2] * b + m[4]).coerceIn(0f, 255f)
+        rgb[1] = (m[5] * r + m[6] * g + m[7] * b + m[9]).coerceIn(0f, 255f)
+        rgb[2] = (m[10] * r + m[11] * g + m[12] * b + m[14]).coerceIn(0f, 255f)
+        val a = if (type.monochrome) 0f else blueDarkening * 0.6f
+        if (a > 0f) {
+            val blueness = (rgb[2] - (rgb[0] + rgb[1]) / 2f) / 255f
+            if (blueness > 0f) { val factor = 1f - a * blueness; for (k in 0 until 3) rgb[k] = (rgb[k] * factor).coerceIn(0f, 255f) }
+        }
+        for (k in 0 until 3) {
+            val curve = ctx.forward[k]
+            val x = rgb[k].coerceIn(0f, 255f)
+            val i = x.toInt().coerceAtMost(254)
+            val t = x - i
+            rgb[k] = curve[i] + (curve[i + 1] - curve[i]) * t
         }
     }
 
     /** The fractional input level that prints as [target] on a channel with the given forward curve. */
     private fun inverseToneFractional(forward: IntArray, target: Float): Float {
         val top = forward[255]
-        if (target <= forward[0]) return 0f
+        if (target <= forward[0]) {
+            // At the film's black or below: the end of the black plateau, where the curve starts
+            // to rise, so that the darks stay continuous with the shadows just above them (and
+            // the Newton steps start where the curve has a slope).
+            var k = 0
+            while (k < 255 && forward[k + 1] <= forward[0]) k++
+            return k.toFloat()
+        }
         if (target >= top) {
             // Out of the film's reach, or exactly its white: the first input that reaches the top.
             var k = 0
@@ -565,36 +817,82 @@ class FilmModel(
      * input colours, so that previews cost a trilinear interpolation per pixel instead of the HSV
      * maths of the per-hue correction. Cached per model state; prints use the exact per-pixel path.
      */
-    private var lutKey: String? = null
-    private var lutPlain: IntArray? = null
-    private var lutCompensated: IntArray? = null
+    @Volatile private var lutKey: String? = null
+    @Volatile private var lutPlain: IntArray? = null
+    @Volatile private var lutCompensated: IntArray? = null
+    /** The last tables built for any state, shown while the current state's table is being built. */
+    @Volatile private var lastPlain: IntArray? = null
+    @Volatile private var lastCompensated: IntArray? = null
+    @Volatile private var buildingKey: String? = null
 
     private fun stateKey(): String = listOf(type, exposure, gamma, blackClip, whiteClip, blackLevel, whiteLevel, shadowWarmth, saturation, warmth, tint, blueDarkening,
         hueShift.joinToString(","), hueGain.joinToString(","), hueValue.joinToString(","), crosstalk.joinToString(",")).joinToString("|")
 
+    /** The table for one state, built on every core at once (the compensation's Newton steps make it a few hundred milliseconds of work). */
     private fun buildLut(compensated: Boolean): IntArray {
         val n = Lut.LUT_N
         val grid = IntArray(n * n * n)
-        var k = 0
-        for (r in 0 until n) for (g in 0 until n) for (b in 0 until n) {
-            grid[k++] = Color.rgb(r * 255 / (n - 1), g * 255 / (n - 1), b * 255 / (n - 1))
+        for (r in 0 until n) for (g in 0 until n) for (b in 0 until n) grid[(r * n + g) * n + b] = Color.rgb(r * 255 / (n - 1), g * 255 / (n - 1), b * 255 / (n - 1))
+        val model = copy()
+        val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+        val workers = (0 until threads).map { t ->
+            Thread {
+                val from = n * t / threads * n * n; val to = n * (t + 1) / threads * n * n
+                if (to > from) {
+                    val part = grid.copyOfRange(from, to)
+                    if (compensated) model.compensate(part)
+                    model.simulate(part)
+                    System.arraycopy(part, 0, grid, from, to - from)
+                }
+            }.apply { start() }
         }
-        if (compensated) compensate(grid)
-        simulate(grid)
+        workers.forEach { it.join() }
         return grid
     }
 
-    /** The table for the current state, built on first use after any change. */
+    /** The table for the current state, built now if it is not there yet. */
     fun lut(compensated: Boolean): IntArray {
         val key = stateKey()
-        if (key != lutKey) { lutKey = key; lutPlain = null; lutCompensated = null }
-        return if (compensated) lutCompensated ?: buildLut(true).also { lutCompensated = it }
-        else lutPlain ?: buildLut(false).also { lutPlain = it }
+        synchronized(this) {
+            if (key != lutKey) { lutKey = key; lutPlain = null; lutCompensated = null }
+            (if (compensated) lutCompensated else lutPlain)?.let { return it }
+        }
+        val built = buildLut(compensated)
+        synchronized(this) {
+            if (lutKey == key) { if (compensated) lutCompensated = built else lutPlain = built }
+            if (compensated) lastCompensated = built else lastPlain = built
+        }
+        return built
     }
 
-    /** Preview version of [compensate] + [simulate]: the cached 3D table, trilinear. */
-    fun simulateFast(pixels: IntArray, compensated: Boolean) {
-        Lut.applyLut(pixels, lut(compensated))
+    /**
+     * Preview version of [compensate] + [simulate]: the cached 3D table, trilinear. With
+     * [onReady], the table for a new state is built on a background thread and [onReady] is
+     * called on the main thread once it is there; meanwhile the last table built is used (or
+     * nothing, the first time). Without it, the table is built here and now.
+     */
+    fun simulateFast(pixels: IntArray, compensated: Boolean, onReady: (() -> Unit)? = null) {
+        if (onReady == null) { Lut.applyLut(pixels, lut(compensated)); return }
+        val key = stateKey()
+        val ready: IntArray? = synchronized(this) {
+            if (key != lutKey) { lutKey = key; lutPlain = null; lutCompensated = null }
+            if (compensated) lutCompensated else lutPlain
+        }
+        if (ready != null) { Lut.applyLut(pixels, ready); return }
+        val buildKey = key + (if (compensated) "|c" else "|p")
+        val start = synchronized(this) { if (buildingKey == buildKey) false else { buildingKey = buildKey; true } }
+        if (start) {
+            Thread {
+                val built = buildLut(compensated)
+                synchronized(this) {
+                    if (lutKey == key) { if (compensated) lutCompensated = built else lutPlain = built }
+                    if (compensated) lastCompensated = built else lastPlain = built
+                    if (buildingKey == buildKey) buildingKey = null
+                }
+                android.os.Handler(android.os.Looper.getMainLooper()).post(onReady)
+            }.start()
+        }
+        (if (compensated) lastCompensated else lastPlain)?.let { Lut.applyLut(pixels, it) }
     }
 
     object Lut {
@@ -710,16 +1008,23 @@ class FilmModel(
         var lut = printLut
         if (lut == null || key != printLutKey) {
             val n = Lut.PRINT_N
-            lut = Array(3) { IntArray(n * n * n) }
-            val ctx = CompensationContext()
-            val rgb = FloatArray(3)
-            var k = 0
-            for (r in 0 until n) for (g in 0 until n) for (b in 0 until n) {
-                rgb[0] = r * 255f / (n - 1); rgb[1] = g * 255f / (n - 1); rgb[2] = b * 255f / (n - 1)
-                compensateFractional(rgb, ctx)
-                for (c in 0 until 3) lut[c][k] = Math.round(rgb[c] * 256f).coerceIn(0, 255 * 256)
-                k++
-            }
+            val table = Array(3) { IntArray(n * n * n) }
+            // Every core at once: each worker takes a slice of red levels, with its own context.
+            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+            val model = copy()
+            (0 until threads).map { t ->
+                Thread {
+                    val ctx = model.CompensationContext()
+                    val rgb = FloatArray(3)
+                    for (r in n * t / threads until n * (t + 1) / threads) for (g in 0 until n) for (b in 0 until n) {
+                        rgb[0] = r * 255f / (n - 1); rgb[1] = g * 255f / (n - 1); rgb[2] = b * 255f / (n - 1)
+                        model.compensateFractional(rgb, ctx)
+                        val k = (r * n + g) * n + b
+                        for (c in 0 until 3) table[c][k] = Math.round(rgb[c] * 256f).coerceIn(0, 255 * 256)
+                    }
+                }.apply { start() }
+            }.forEach { it.join() }
+            lut = table
             printLut = lut
             printLutKey = key
         }
